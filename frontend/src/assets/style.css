@@ -1,0 +1,140 @@
+body {
+    background-color: #f8f9fa;
+}
+.btn-primary {
+    background-color: #27ae60;
+    border-color: #27ae60;
+}
+.btn-primary:hover {
+    background-color: #219653;
+    border-color: #219653;
+}
+.btn-darkgreen {
+color: #fff;
+background-color: #018a01; /* Dark green color */
+border-color: #018a01;
+}
+.btn-darkgreen:hover {
+color: #fff;
+background-color: #016601; /* Slightly darker shade on hover */
+border-color: #016601;
+}
+.dropdown-menu.search-dropdown {
+    padding: 0.5rem;
+    width: 350px;
+}
+.search-input {
+    width: 100%;
+}
+.price-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+.spacer {
+    height: 10px;
+}
+
+.navbar {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #ccc;
+}
+.navbar-nav .nav-item {
+    transition: transform 0.3s;
+}
+.navbar-nav .nav-item:hover {
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+}
+.navbar-nav .nav-link {
+    color: #333;
+}
+.dropdown-menu {
+    background-color: #fff;
+    z-index: 100;
+}   
+.search-input {
+    width: 100%;
+}
+.search-dropdown {
+    position: absolute;
+    top: 100%; 
+    right: 0; 
+    padding: 1rem;
+    width: 300px;
+}
+.btn-outline-success {
+    color: #fff;
+    background-color: #27ae60;
+    border-color: #27ae60;
+}
+.container {
+    margin-top: 40px;
+}
+.card {
+    border: none;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s;
+}
+.card-title {
+    font-size: 20px;
+    margin-bottom: 10px;
+}
+.card-text {
+    font-size: 16px;
+    color: #6c757d;
+    margin-bottom: 10px;
+}
+.form-control {
+    border-color: #ccc;
+}
+.flash-messages {
+    list-style: none;
+    padding: 0;
+}
+.flash-messages ul {
+    font-size: 18px;
+    color: #d35400;
+    margin-bottom: 10px;
+}
+.btn-custom {
+    color: #17a2b8; 
+    border-color: #17a2b8; 
+}        
+.btn-custom:hover {
+    background-color: #28a745; 
+    border-color: #28a745; 
+    color: #fff; 
+}
+
+.order-card {
+    margin-bottom: 20px; 
+    background-color: #f8f9fa;
+    border: 1px solid #ccc; 
+    border-radius: 5px; 
+    padding: 15px;
+    text-align: center; 
+    font-size: 18px; 
+    width: 70%; 
+    margin: 0 auto; 
+}
+
+.order-date {
+    font-size: 24px;
+    margin-bottom: 10px;
+}
+
+.order-items {
+    list-style-type: none;
+    padding-left: 0;
+    margin-bottom: 15px;
+}
+
+.order-item {
+    margin-bottom: 10px;
+}
+
+.order-total {
+    font-size: 22px;
+    font-weight: bold;
+}
