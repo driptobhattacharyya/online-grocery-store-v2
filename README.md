@@ -5,10 +5,11 @@ This is an enhanced version of the original Grocery Store project by me. Althoug
 1. cd into the "Code" folder
 2. run "python app.py"
 3. cd into the "frontend" folder
-4. run "npm install" and then "npm run serve"
-5. Open on browser "localhost:8080"
-6. register on the page and login can be done
-7. All the user-end features can be used once logged in
+4. run "npm install". This might take a couple of seconds.
+5. run "npm run serve"
+6. Open on browser "localhost:8080"
+7. register on the page and login can be done
+8. All the user-end features can be used once logged in
 
 To access the admin-end:
 1. Go to login
