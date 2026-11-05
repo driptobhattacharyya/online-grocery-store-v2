@@ -14,6 +14,11 @@
       </div>
     </div>
 
+    <LowStockPanel
+      :items="lowStock"
+      :initial-threshold="threshold"
+      @updated="onLowStock"
+    />
     <div class="container">
       <h2 class="mb-4">Existing Inventory</h2>
       <div class="row row-cols-1 row-cols-md-3 g-4">
@@ -65,16 +70,19 @@
 import axios from "axios";
 import "@/assets/style_manager.css";
 import Manager_navbar from "@/components/Manager_navbar.vue";
-// import Admin_navbar from "@/components/Admin_navbar.vue";
+import LowStockPanel from "@/components/LowStockPanel.vue";
 
 export default {
   name: "StoreManagerDashboard",
   components: {
     Manager_navbar,
+    LowStockPanel,
   },
   data() {
     return {
       categories: [],
+      lowStock: [],
+      threshold: 10,
       token: sessionStorage.getItem("accessToken"),
       is_manager: sessionStorage.getItem("is_manager"),
       newCategory: "",
@@ -88,25 +96,27 @@ export default {
     getIems() {
       console.log(this.is_manager);
       axios
-        .get("http://localhost:5000/api/manager/dashboard", {
-          params: {
-            is_manager: this.is_manager,
-          },
-          mode: "no-cors",
+        .get("/api/manager/dashboard", {
           headers: {
             Authorization: "Bearer " + this.token,
           },
         })
         .then((response) => {
           if (response.data.error) {
-            alert(response.error);
+            alert(response.data.error);
           } else {
             this.categories = response.data.categories;
+            this.lowStock = response.data.low_stock || [];
+            this.threshold = response.data.low_stock_threshold;
           }
         })
         .catch((error) => {
           alert(error);
         });
+    },
+    onLowStock(payload) {
+      this.lowStock = payload.low_stock || [];
+      this.threshold = payload.low_stock_threshold;
     },
     editProduct(product) {
       console.log(product);
@@ -116,7 +126,7 @@ export default {
       sessionStorage.setItem("productPrice", product.price);
       sessionStorage.setItem("productMnfdate", product.manufacture_date);
       sessionStorage.setItem("productExpdate", product.expiry_date);
-      this.$router.push(`/api/manager/edit_product/${product.productID}`);
+      this.$router.push(`/manager/edit-product/${product.productID}`);
     },
     deleteProduct(product) {
       // Confirm deletion with user
@@ -128,15 +138,11 @@ export default {
           // Send delete request to backend
           axios
             .post(
-              "http://localhost:5000/api/manager/delete_product",
+              "/api/manager/delete_product",
               {
                 product_id: product.productID,
               },
               {
-                params: {
-                  is_manager: this.is_manager,
-                },
-                mode: "no-cors",
                 headers: {
                   Authorization: "Bearer " + this.token,
                 },

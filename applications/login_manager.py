@@ -1,87 +1,55 @@
-import hashlib
-from applications.database import *
-import re
+from applications.database import get_db
+from applications.errors import AppError
+from applications.security import (
+    hash_password,
+    validate_email,
+    validate_phone_number,
+    verify_password,
+)
 
-def validate_email(email):
-    email_pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
-    return re.match(email_pattern, email) is not None
 
-def validate_phone_number(phone_number):
-    numeric_phone = re.sub(r'\D', '', phone_number)
-    return len(numeric_phone) == 10
-
-def get_user(email):
+def user_role(email):
     db = get_db()
-    cursor = db.cursor()
-    try:
-        query = "SELECT * FROM user_profiles WHERE email=?"
-        cursor.execute(query, (email,))
-        user = cursor.fetchone()
-        cursor.close()
-        return user
-    except Exception as e:
-        cursor.close()
-        raise e
+    row = db.execute("SELECT role FROM users WHERE email = ?", (email,)).fetchone()
+    if not row:
+        raise AppError("Email does not exist. Please try again.", 401)
+    return row["role"]
+
 
 def login(email, password):
+    if not validate_email(email):
+        raise AppError("Invalid email.", 401)
     db = get_db()
-    cursor = db.cursor()
-    if not validate_email(email): raise Exception("Invalid email")
-    
-    try:
-        query = "SELECT * FROM users WHERE email=?"
-        cursor.execute(query, (email,))
-        user = cursor.fetchone()
-
-        if user:
-            stored_hashed_password = user[1]
-            input_hashed_password = hashlib.sha256(password.encode()).hexdigest()
-            
-            if stored_hashed_password == input_hashed_password:
-                cursor.close()
-                return
-            else:
-                raise Exception("Invalid password. Please try again.")        
-        else:
-            raise Exception("Email does not exist. Please try again.")
-    except Exception as e:
-        cursor.close()
-        raise e
+    user = db.execute(
+        "SELECT email, password, role FROM users WHERE email = ?",
+        (email.lower().strip(),),
+    ).fetchone()
+    if not user or not verify_password(password or "", user["password"]):
+        raise AppError("Invalid email or password.", 401)
+    return {"email": user["email"], "role": user["role"]}
 
 
-
-def signup(email, password):
+def signup(email, password, name, phone_number, address):
+    if not validate_email(email):
+        raise AppError("Valid email required.")
+    if not validate_phone_number(phone_number):
+        raise AppError("Valid phone number required.")
+    if not name or not str(name).strip():
+        raise AppError("Name is required.")
+    if not password or len(password) < 6:
+        raise AppError("Password must be at least 6 characters.")
+    email = email.lower().strip()
     db = get_db()
-    cursor = db.cursor()
-    try:
-        hashed_password = hashlib.sha256(password.encode()).hexdigest()
-        query_1 = "SELECT * FROM users WHERE email=?"
-        cursor.execute(query_1, (email,))
-        existing_user = cursor.fetchone()
-        print(existing_user)
-        if existing_user != None:
-            raise Exception("Email already exists")
-        query = "INSERT INTO users (email, password) VALUES (?, ?)"
-        cursor.execute(query, (email, hashed_password))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-
-
-def manager_login(email, password):
-    db = get_db()
-    cursor = db.cursor()
-    
-    query = "SELECT * FROM managers WHERE email=? AND password=?"
-    cursor.execute(query, (email, password))
-    manager = cursor.fetchone()
-
-    cursor.close()
-
-    if manager:
-        return True
-    else:
-        raise Exception("Invalid email or password. Please try again.")
+    existing = db.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone()
+    if existing:
+        raise AppError("Email already exists.")
+    db.execute(
+        "INSERT INTO users (email, password, role) VALUES (?, ?, 'customer')",
+        (email, hash_password(password)),
+    )
+    db.execute(
+        "INSERT INTO user_profiles (email, name, address, phone) VALUES (?, ?, ?, ?)",
+        (email, name.strip(), address or "", phone_number),
+    )
+    db.commit()
+    return email

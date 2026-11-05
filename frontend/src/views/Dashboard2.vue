@@ -56,13 +56,13 @@ export default {
       user: {},
       orders: [],
       signed: false,
-      user: "",
+      name: "",
       manager_status: ""
     };
   },
   mounted() {
     this.fetch_user_dashboard();
-    this.signed = sessionStorage.getItem("signed");
+    this.signed = sessionStorage.getItem("signed") === "true";
     this.name = sessionStorage.getItem("name");
   },
   methods:{
@@ -71,7 +71,7 @@ export default {
         const token = sessionStorage.getItem("accessToken");
         console.log(token);
         axios
-          .get("http://localhost:5000/api/dashboard", {
+          .get("/api/dashboard", {
             mode: "no-cors",
             headers: {
               Authorization: "Bearer " + token,
@@ -94,7 +94,7 @@ export default {
         const token = sessionStorage.getItem("accessToken");
         console.log(token);
         axios
-          .get("http://localhost:5000/api/apply_manager", {
+          .post("/api/apply_manager", {}, {
             mode: "no-cors",
             headers: {
               Authorization: "Bearer " + token,

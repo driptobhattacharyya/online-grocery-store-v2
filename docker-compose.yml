@@ -1,0 +1,80 @@
+services:
+  redis:
+    image: redis:7-alpine
+
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  api:
+    build: .
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-local-demo-secret-key-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-demo-jwt-secret-change-me}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DATABASE_PATH: /data/grocery.db
+      REPORT_DIR: /data/reports
+      CACHE_TYPE: RedisCache
+      CACHE_REDIS_HOST: redis
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SEED_DEMO_DATA: "1"
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+    volumes:
+      - grocery-data:/data
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+      - mailhog
+
+  worker:
+    build: .
+    command: celery -A app.celery_app worker --loglevel=INFO
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-local-demo-secret-key-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-demo-jwt-secret-change-me}
+      DATABASE_PATH: /data/grocery.db
+      REPORT_DIR: /data/reports
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SEED_DEMO_DATA: "0"
+    volumes:
+      - grocery-data:/data
+    depends_on:
+      - redis
+      - api
+
+  beat:
+    build: .
+    command: celery -A app.celery_app beat --loglevel=INFO
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-local-demo-secret-key-change-me}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-demo-jwt-secret-change-me}
+      DATABASE_PATH: /data/grocery.db
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SEED_DEMO_DATA: "0"
+    volumes:
+      - grocery-data:/data
+    depends_on:
+      - redis
+      - worker
+
+  web:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  grocery-data:

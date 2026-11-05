@@ -49,27 +49,26 @@ export default {
   methods: {
     async login() {
       axios
-        .post("http://localhost:5000/api/login", {
+        .post("/api/login", {
           email: this.email,
           password: this.password,
         })
         .then((response) => {
-          console.log(response.data)
-
-          const accessToken = response.data.access_token;
-          sessionStorage.setItem("accessToken", accessToken);
-          if (response.data.is_manager){
-            alert("Welcome manager")
-            sessionStorage.setItem("is_manager", true);
-            this.$router.push("/StoreManager/dashboard")
+          sessionStorage.setItem("accessToken", response.data.access_token);
+          sessionStorage.setItem("role", response.data.role);
+          sessionStorage.setItem("signed", "true");
+          sessionStorage.setItem("name", response.data.name);
+          if (response.data.role === "manager") {
+            sessionStorage.setItem("is_manager", "true");
+            this.$router.push("/StoreManager/dashboard");
+          } else if (response.data.role === "admin") {
+            this.$router.push("/admin/dashboard");
           } else {
-            sessionStorage.setItem("signed", true);
-            sessionStorage.setItem("name", response.data.name);
             this.$router.push("/");
-          }          
+          }
         })
         .catch((error) => {
-          console.error(error.response.data.error);
+          alert(error.response?.data?.error || "Login failed.");
         });
     },
   },

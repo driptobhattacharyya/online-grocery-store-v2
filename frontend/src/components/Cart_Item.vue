@@ -52,7 +52,7 @@ export default {
         try {
           console.log(this.cartItem.productID, this.quantity);
           const response = axios.post(
-            "http://127.0.0.1:5000/api/shopping_cart/update_product",
+            "/api/shopping_cart/update_product",
             {
               product_id: this.cartItem.productID,
               quantity: this.quantity,
@@ -74,7 +74,7 @@ export default {
       if (confirm("Are you sure you want to delete this item  from your cart")){
         try {
           axios.post(
-            "http://127.0.0.1:5000/api/shopping_cart/delete_product",
+            "/api/shopping_cart/delete_product",
             {
               "product_id": this.cartItem.productID,
             },

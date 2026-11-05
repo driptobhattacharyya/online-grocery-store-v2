@@ -35,13 +35,13 @@
           </li>
 
           <li class="nav-item">
-            <a
-              class="nav-link active"
-              aria-current="page"
-              href="#"
-              @click="download_report"
-              >Report</a
-            >
+            <router-link class="nav-link" to="/manager/summary">Summary</router-link>
+          </li>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/manager/coupons">Coupons</router-link>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="#" @click.prevent="download_report">Report</a>
           </li>
 
           <li class="nav-item">
@@ -54,7 +54,7 @@
 </template>
 
 <script>
-import axios from "axios";
+import { downloadSalesReport } from "@/report";
 export default {
   props: {},
   data() {
@@ -75,29 +75,18 @@ export default {
     },
     logout() {
       sessionStorage.removeItem("accessToken");
+      sessionStorage.removeItem("role");
+      sessionStorage.removeItem("signed");
+      sessionStorage.removeItem("name");
       alert("Logged out successfully");
       this.$router.push("/");
     },
     async download_report() {
-      const token = sessionStorage.getItem("access_token");
-      fetch("http://localhost:5000/api/manager/prepare_report"
-      // , {
-      //   headers: {
-      //     "Authorization": `Bearer ${this.token}`,
-      //   },}
-      )
-        .then((response) => response.blob())
-        .then((blob) => {
-          const url = window.URL.createObjectURL(new Blob([blob]));
-          const link = document.createElement("a");
-          link.href = url;
-          link.setAttribute("download", "order_report.csv");
-          document.body.appendChild(link);
-          link.click();
-        })
-        .catch((error) => {
-          console.error("Error downloading order report:", error);
-        });
+      try {
+        await downloadSalesReport();
+      } catch (error) {
+        alert(error.message || "Could not download the report.");
+      }
     },
   },
 };

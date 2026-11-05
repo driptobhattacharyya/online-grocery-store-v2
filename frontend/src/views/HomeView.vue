@@ -45,7 +45,7 @@ export default {
     // Make a GET request to your Flask API endpoint
     if (!this.received_data.length) {
       axios
-        .get("http://localhost:5000/api/user_dashboard")
+        .get("/api/user_dashboard")
         .then((response) => {
           this.received_data = response.data;
           console.log(received_data.user, received_data.signed);
