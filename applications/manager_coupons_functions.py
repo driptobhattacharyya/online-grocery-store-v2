@@ -1,72 +1,63 @@
-from applications.database import *
+"""Manager coupon administration, ported from the version 1 store."""
+
+from applications.database import get_db
+from applications.errors import AppError
 
 
-def get_coupon_codes_from_db():
+def list_coupons():
     db = get_db()
-    cursor = db.cursor()
-    
+    rows = db.execute(
+        """
+        SELECT c.coupon_code, c.discount_percentage, COUNT(u.user_email) AS usage_count
+        FROM coupons c
+        LEFT JOIN used_coupons u ON u.coupon_code = c.coupon_code
+        GROUP BY c.coupon_code, c.discount_percentage
+        ORDER BY c.coupon_code
+        """
+    ).fetchall()
+    return [
+        {
+            "coupon_code": row["coupon_code"],
+            "discount_percentage": row["discount_percentage"],
+            "count": row["usage_count"],
+        }
+        for row in rows
+    ]
+
+
+def add_coupon(code, discount):
+    normalized = (code or "").strip().upper()
+    if not normalized or len(normalized) > 20 or not normalized.replace("-", "").isalnum():
+        raise AppError("Coupon code must be 1-20 letters, numbers or hyphens.")
     try:
-    # Query to fetch all coupon codes from the coupons table
-        query = """
-                SELECT c.coupon_code, c.discount_percentage, COUNT(u.user_email) AS usage_count
-                FROM coupons c
-                LEFT JOIN used_coupons u ON c.coupon_code = u.coupon_code
-                GROUP BY c.coupon_code, c.discount_percentage
-                """
-        
-        cursor.execute(query)
-        rows = cursor.fetchall()
-
-        # Return the list of coupon codes as dictionaries
-        result = [{'coupon_code': row[0], 'discount_percentage': row[1], 'count': row[2]} for row in rows]
-
-        cursor.close()
-        return result
-    
-    except Exception as e:
-        cursor.close()
-        raise e
-
-
-def add_coupon_code_to_db(code, discount):
-    existing_coupons = get_coupon_codes_from_db()
-    for coupon in existing_coupons:
-        if coupon['coupon_code'] == code:
-            raise Exception('Coupon code already exists')
-    
+        percentage = float(discount)
+    except (TypeError, ValueError) as exc:
+        raise AppError("Discount percentage must be a number.") from exc
+    if percentage <= 0 or percentage > 100:
+        raise AppError("Discount percentage must be between 1 and 100.")
     db = get_db()
-    cursor = db.cursor()
-    
-    try:
-    # Query to insert a new coupon code into the coupons table
-        query = "INSERT INTO coupons (coupon_code, discount_percentage) VALUES (?, ?)"
-        
-        cursor.execute(query, (code, discount))
-        
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+    existing = db.execute(
+        "SELECT 1 FROM coupons WHERE coupon_code = ?", (normalized,)
+    ).fetchone()
+    if existing:
+        raise AppError("Coupon code already exists.")
+    db.execute(
+        "INSERT INTO coupons (coupon_code, discount_percentage) VALUES (?, ?)",
+        (normalized, percentage),
+    )
+    db.commit()
+    return {"coupon_code": normalized, "discount_percentage": percentage}
 
 
-def remove_coupon_code_from_db(coupon_code):
+def remove_coupon(code):
+    normalized = (code or "").strip().upper()
     db = get_db()
-    cursor = db.cursor()
-    
-    try:
-    # Query to delete a coupon code from both coupons and used_coupons tables
-        delete_coupon_query = "DELETE FROM coupons WHERE coupon_code = ?"
-        delete_used_coupon_query = "DELETE FROM used_coupons WHERE coupon_code = ?"
-        
-        cursor.execute(delete_coupon_query, (coupon_code,))
-        cursor.execute(delete_used_coupon_query, (coupon_code,))
-        
-        db.commit()
-        cursor.close()
-
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+    existing = db.execute(
+        "SELECT 1 FROM coupons WHERE coupon_code = ?", (normalized,)
+    ).fetchone()
+    if not existing:
+        raise AppError("Coupon not found.", 404)
+    db.execute("DELETE FROM cart_coupons WHERE coupon_code = ?", (normalized,))
+    db.execute("DELETE FROM used_coupons WHERE coupon_code = ?", (normalized,))
+    db.execute("DELETE FROM coupons WHERE coupon_code = ?", (normalized,))
+    db.commit()

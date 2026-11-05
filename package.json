@@ -1,0 +1,11 @@
+{
+  "name": "online-grocery-store-unified",
+  "private": true,
+  "scripts": {
+    "test": "python3 -m pytest",
+    "seed": "python3 -m applications.schema",
+    "serve:api": "python3 app.py",
+    "serve:web": "npm --prefix frontend run serve",
+    "build:web": "npm --prefix frontend run build"
+  }
+}

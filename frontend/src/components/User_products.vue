@@ -9,9 +9,11 @@
     <Navbar :user="name" :signed="signed" @ChildEvent="handleChildEvent" />
     <div>
       <div class="container">
+        <RecommendationRow title="Picked for you" :items="recommendations" :signed="signed" />
         <div class="row row-cols-1 row-cols-md-3 g-4">
           <ProductCard
             v-for="product in products"
+            :key="product.productID"
             :product="product"
             :signed="signed"
           />
@@ -25,67 +27,51 @@
 import axios from "axios";
 import ProductCard from "@/components/ProductCard.vue";
 import Navbar from "@/components/Navbar.vue";
+import RecommendationRow from "@/components/RecommendationRow.vue";
 import "@/assets/style.css";
 
 export default {
   components: {
     ProductCard,
     Navbar,
+    RecommendationRow,
   },
   data() {
     return {
-      received_data: [],
       loading: false,
       products: [],
+      recommendations: [],
       name: "",
       signed: false,
     };
   },
   mounted() {
-    this.signed = sessionStorage.getItem("signed");
-    this.name = sessionStorage.getItem("name");
-    if (!this.loading && !this.received_data.length) {
-      this.loading = true;
-      axios
-        .get("http://localhost:5000/api/user_dashboard")
-        .then((response) => {
-          this.received_data = response.data;
-          this.products = this.received_data.products;
-        })
-        .catch((error) => {
-          console.error("Error fetching data:", error);
-        })
-        .finally(() => {
-          this.loading = false;
+    this.signed = sessionStorage.getItem("signed") === "true";
+    this.name = sessionStorage.getItem("name") || "";
+    this.loading = true;
+    axios
+      .get("/api/user_dashboard")
+      .then((response) => {
+        this.products = response.data.products;
+      })
+      .finally(() => {
+        this.loading = false;
+      });
+    const recommendationUrl = this.signed ? "/api/recommendations/for-you" : "/api/recommendations/popular";
+    axios
+      .get(recommendationUrl)
+      .then((response) => {
+        this.recommendations = response.data.recommendations || [];
+      })
+      .catch(() => {
+        axios.get("/api/recommendations/popular").then((response) => {
+          this.recommendations = response.data.recommendations || [];
         });
-    }
+      });
   },
   methods: {
     handleChildEvent(products) {
-      console.log("Printing 1 product " + products[0]);
-      if (products[0].categoryID) {
-        console.log("Coming through...");
-        var new_products = [];
-        for (var i = 0; i < products.length; i++) {
-          var product = products[i];
-          var new_product = [
-            product.productID,
-            product.name,
-            product.manufacture_date,
-            product.expiry_date,
-            product.price,
-            product.dynamic_price,
-            product.is_recommended,
-            product.categoryID,
-            product.unit,
-          ];
-          new_products.push(new_product);
-        }
-        this.products = new_products;
-      } else {
-        this.products = products;
-      }
-      console.log(this.products);
+      this.products = products || [];
     },
   },
 };

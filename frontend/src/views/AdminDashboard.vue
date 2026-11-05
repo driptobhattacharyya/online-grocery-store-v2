@@ -39,6 +39,11 @@
       </div>
     </div>
 
+    <LowStockPanel
+      :items="lowStock"
+      :initial-threshold="threshold"
+      @updated="onLowStock"
+    />
     <div class="container">
       <h2 class="mb-4">Existing Inventory</h2>
       <div class="row row-cols-1 row-cols-md-3 g-4">
@@ -96,15 +101,19 @@
 import axios from "axios";
 import "@/assets/style_manager.css";
 import Admin_navbar from "@/components/Admin_navbar.vue";
+import LowStockPanel from "@/components/LowStockPanel.vue";
 
 export default {
   name: "AdminDashboard",
   components: {
     Admin_navbar,
+    LowStockPanel,
   },
   data() {
     return {
       categories: [],
+      lowStock: [],
+      threshold: 10,
       token: sessionStorage.getItem("accessToken"),
       newCategory: "",
     };
@@ -121,7 +130,7 @@ export default {
       }
       axios
         .post(
-          "http://localhost:5000/manager/categories/add_category",
+          "/api/manager/categories",
           {
             category_name: this.newCategory.trim(),
           },
@@ -141,18 +150,11 @@ export default {
       if (confirm(`Are you sure you want to delete this category?`)) {
         console.log(categoryID);
         axios
-          .post(
-            "http://localhost:5000/manager/categories/delete_category",
-            {
-              categoryID: categoryID,
+          .delete(`/api/manager/categories/${categoryID}`, {
+            headers: {
+              Authorization: "Bearer " + this.token,
             },
-            {
-              mode: "no-cors",
-              headers: {
-                Authorization: "Bearer " + this.token,
-              },
-            }
-          )
+          })
           .then((response) => {
             console.log("Category deleted successfully:", response.data);
             alert("Category deleted successfully!");
@@ -163,13 +165,9 @@ export default {
     getIems() {
       console.log(this.is_manager);
       axios
-        .get("http://localhost:5000/api/manager/dashboard", {
-          mode: "no-cors",
+        .get("/api/manager/dashboard", {
           headers: {
             Authorization: "Bearer " + this.token,
-          },
-          params: {
-            is_manager: false,
           },
         })
         .then((response) => {
@@ -177,11 +175,17 @@ export default {
             alert(response.error);
           } else {
             this.categories = response.data.categories;
+            this.lowStock = response.data.low_stock || [];
+            this.threshold = response.data.low_stock_threshold;
           }
         })
         .catch((error) => {
           alert(error);
         });
+    },
+    onLowStock(payload) {
+      this.lowStock = payload.low_stock || [];
+      this.threshold = payload.low_stock_threshold;
     },
     editProduct(product) {
       // Redirect to edit product page
@@ -192,7 +196,7 @@ export default {
       sessionStorage.setItem("productPrice", product.price);
       sessionStorage.setItem("productMnfdate", product.manufacture_date);
       sessionStorage.setItem("productExpdate", product.expiry_date);
-      this.$router.push(`/api/manager/edit_product/${product.productID}`);
+      this.$router.push(`/manager/edit-product/${product.productID}`);
     },
     deleteProduct(product) {
       // Confirm deletion with user
@@ -204,7 +208,7 @@ export default {
           // Send delete request to backend
           axios
             .post(
-              "http://localhost:5000/api/manager/delete_product",
+              "/api/manager/delete_product",
               {
                 product_id: product.productID,
               },

@@ -61,17 +61,22 @@
             >
           </li>
           <li class="nav-item" v-if="signed">
-            <a class="nav-link active" aria-current="page" href="/shopping_cart"
-              >Cart</a
-            >
+            <router-link class="nav-link" to="/shopping_cart">Cart</router-link>
           </li>
-
           <li class="nav-item" v-if="signed">
-            <a class="nav-link" href="#" @click="logout">Logout</a>
+            <router-link class="nav-link" to="/wishlist">Wishlist</router-link>
           </li>
-          
-          <li class="nav-item" v-if="is_manager">
-            <a class="nav-link" href="/admin/dashboard" >Manager</a>
+          <li class="nav-item">
+            <router-link class="nav-link" to="/assistant">Assistant</router-link>
+          </li>
+          <li class="nav-item" v-if="signed">
+            <a class="nav-link" href="#" @click.prevent="logout">Logout</a>
+          </li>
+          <li class="nav-item" v-if="role === 'manager'">
+            <router-link class="nav-link" to="/StoreManager/dashboard">Manager</router-link>
+          </li>
+          <li class="nav-item" v-if="role === 'admin'">
+            <router-link class="nav-link" to="/admin/dashboard">Admin</router-link>
           </li>
 
           <li class="nav-item dropdown" v-if="path == '/'">
@@ -164,7 +169,7 @@
                     <input
                       type="date"
                       class="form-control"
-                      v-model="search_filters.max_manufacture_date"
+                      v-model="search_filters.max_expiry_date"
                       name="max_expiry_date"
                     />
                   </div>
@@ -184,6 +189,9 @@
 
                 <button class="btn btn-outline-success" type="submit">
                   Search
+                </button>
+                <button class="btn btn-outline-primary ms-2" type="button" @click="smartSearch">
+                  Smart search
                 </button>
               </form>
             </div>
@@ -206,6 +214,7 @@ export default {
       data: [],
       categories: [],
       is_manager: false,
+      role: sessionStorage.getItem("role") || "",
       search_filters:{
         minPrice:0,
         maxPrice: 0,
@@ -228,7 +237,7 @@ export default {
   methods: {
     async getCategories() {
       axios
-        .get("http://localhost:5000/api/getCategories")
+        .get("/api/getCategories")
         .then((response) => {
           this.categories = response.data;
           console.log(this.categories);
@@ -241,17 +250,14 @@ export default {
       console.log("Checking a particular category");
       // if (!this.data.length) {
       axios
-        .get(`http://localhost:5000/api/category/${categoryID}`)
+        .get(`/api/category/${categoryID}`)
         .then((response) => {
-          this.data = response.data;
-          console.log(this.data);
-          // send_data_to_parent();
+          const products = response.data.products || response.data;
           if (this.$route.path === "/") {
-            this.$emit("ChildEvent", this.data);
+            this.$emit("ChildEvent", products);
           } else {
             this.$router.push("/");
-            console.log("Hi");
-            this.$emit("ChildEvent", this.data);
+            this.$emit("ChildEvent", products);
           }
         })
         .catch((error) => {
@@ -265,7 +271,7 @@ export default {
         console.log(searchQuery)
         
         
-        axios.post("http://localhost:5000/api/search", {
+        axios.post("/api/search", {
           search_query: searchQuery,
           min_price: this.search_filters.minPrice,
           max_price: this.search_filters.maxPrice,
@@ -276,16 +282,12 @@ export default {
           exclude_out_of_stock: this.search_filters.exclude_OOS
         })
         .then((response) =>{
-          if(response.data.products){
+          if(response.data.products && response.data.products.length){
             this.$emit("ChildEvent", response.data.products);
-          }
-          else if(response.data.products_in_category){
-            this.$emit("ChildEvent", response.data.products_in_category);
           }
           else if(response.data.no_results){
             alert("No results found");
           }
-          
         })
         .catch((error) => {
           console.error("Error fetching data:", error);
@@ -293,6 +295,21 @@ export default {
       } catch (error) {
         console.error("Error performing search:", error);
       }
+    },
+    smartSearch() {
+      const searchQuery = this.$refs.searchInput.value;
+      axios
+        .post("/api/search/smart", { query: searchQuery })
+        .then((response) => {
+          if (response.data.products && response.data.products.length) {
+            this.$emit("ChildEvent", response.data.products);
+          } else {
+            alert("No results found");
+          }
+        })
+        .catch((error) => {
+          alert(error.response?.data?.error || "Smart search failed.");
+        });
     },
     goHome() {
       if (this.$route.path === "/") {
@@ -305,6 +322,8 @@ export default {
       sessionStorage.removeItem("accessToken");
       sessionStorage.removeItem("signed");
       sessionStorage.removeItem("name");
+      sessionStorage.removeItem("role");
+      sessionStorage.removeItem("is_manager");
       alert("Logged out successfully");
       if (this.$route.path === "/") {
         window.location.reload();

@@ -56,7 +56,7 @@ export default {
   },
   mounted() {
     axios
-      .get("http://localhost:5000/api/admin/manager_requests", {
+      .get("/api/admin/manager_requests", {
         mode: "no-cors",
         headers: {
           Authorization: "Bearer " + this.token,
@@ -79,7 +79,7 @@ export default {
         ) {
           axios
             .post(
-              "http://localhost:5000/api/admin/accept_manager",
+              "/api/admin/accept_manager",
               {
                 email: email,
               },
@@ -112,7 +112,7 @@ export default {
         ) {
           axios
             .post(
-              "http://localhost:5000/api/admin/reject_manager",
+              "/api/admin/reject_manager",
               {
                 email: email,
               },

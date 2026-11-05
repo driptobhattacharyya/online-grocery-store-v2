@@ -14,6 +14,11 @@ import AdminLogin from "../components/AdminLogin.vue"
 import ManagerRequests from "../views/ManagerRequests.vue"
 
 import StoreManagerDashboard from "../views/StoreManagerDashboard.vue"
+import ManagerCoupons from "../views/ManagerCoupons.vue"
+import ManagerSummary from "../views/ManagerSummary.vue"
+import Wishlist from "../views/Wishlist.vue"
+import ProductDetail from "../views/ProductDetail.vue"
+import Assistant from "../views/Assistant.vue"
 
 const routes = [
   {
@@ -67,7 +72,7 @@ const routes = [
     component: AddProduct
   },
   {
-    path: "/api/manager/edit_product/:product_id",
+    path: "/manager/edit-product/:product_id",
     name: "EditProduct",
     component: EditProduct,
     // props: true
@@ -86,6 +91,31 @@ const routes = [
     path: "/admin/manager-requests",
     name: "ManagerRequests",
     component: ManagerRequests
+  },
+  {
+    path: "/manager/coupons",
+    name: "ManagerCoupons",
+    component: ManagerCoupons
+  },
+  {
+    path: "/manager/summary",
+    name: "ManagerSummary",
+    component: ManagerSummary
+  },
+  {
+    path: "/wishlist",
+    name: "Wishlist",
+    component: Wishlist
+  },
+  {
+    path: "/products/:id",
+    name: "ProductDetail",
+    component: ProductDetail
+  },
+  {
+    path: "/assistant",
+    name: "Assistant",
+    component: Assistant
   }
 ];
 

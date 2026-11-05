@@ -1,213 +1,263 @@
-from applications.database import *
+"""Cart, coupon application, and checkout.
 
-def insert_cart_item(email, product_id, quantity):
+Order totals are always computed here from database prices. A total sent by
+the browser is ignored.
+"""
+
+from datetime import date
+
+from applications.database import get_db
+from applications.errors import AppError, parse_positive_int
+
+
+def _money(value):
+    return round(float(value) + 0.0, 2)
+
+
+def _cart_rows(db, email):
+    return db.execute(
+        """
+        SELECT p.productID, p.name, p.price, p.unit, c.quantity AS cart_quantity,
+               IFNULL(i.quantity, 0) AS stock
+        FROM cart c
+        JOIN products p ON p.productID = c.product_id
+        LEFT JOIN inventory i ON i.productID = p.productID
+        WHERE c.email = ?
+        ORDER BY p.name
+        """,
+        (email,),
+    ).fetchall()
+
+
+def _active_coupon(db, email):
+    row = db.execute(
+        "SELECT coupon_code FROM cart_coupons WHERE email = ?",
+        (email,),
+    ).fetchone()
+    if not row:
+        return None, 0
+    coupon = db.execute(
+        "SELECT coupon_code, discount_percentage FROM coupons WHERE coupon_code = ?",
+        (row["coupon_code"],),
+    ).fetchone()
+    if not coupon:
+        return None, 0
+    used = db.execute(
+        "SELECT 1 FROM used_coupons WHERE user_email = ? AND coupon_code = ?",
+        (email, coupon["coupon_code"]),
+    ).fetchone()
+    if used:
+        return None, 0
+    return coupon["coupon_code"], float(coupon["discount_percentage"])
+
+
+def cart_quote(email):
     db = get_db()
-    cursor = db.cursor()
-
-    # Check if the product is available in the inventory with enough quantity
-    cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (product_id,))
-    available_quantity = cursor.fetchone()
-    
-    if available_quantity is None or available_quantity[0] < quantity:
-        cursor.close()
-        raise Exception("Insufficient stock for this product. Available in stock:", available_quantity[0])
-    
-    try:
-        # Check if the product is already in the cart for the user
-        cursor.execute("SELECT quantity FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
-        existing_quantity = cursor.fetchone()
-        
-        if existing_quantity:
-            # If the product is already in the cart, update the quantity
-            new_quantity = existing_quantity[0] + quantity
-            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?", 
-                           (new_quantity, email, product_id))
-        else:
-            # If the product is not in the cart, insert a new row
-            cursor.execute("INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, ?)",
-                            (email, product_id, quantity))
-        
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+    rows = _cart_rows(db, email)
+    items = []
+    subtotal = 0.0
+    for row in rows:
+        line_total = _money(row["price"] * row["cart_quantity"])
+        subtotal += row["price"] * row["cart_quantity"]
+        items.append(
+            {
+                "productID": row["productID"],
+                "name": row["name"],
+                "price": row["price"],
+                "unit": row["unit"],
+                "quantity": row["cart_quantity"],
+                "stock": row["stock"],
+                "line_total": line_total,
+            }
+        )
+    subtotal = _money(subtotal)
+    coupon_code, discount_percentage = _active_coupon(db, email)
+    discount_amount = _money(subtotal * discount_percentage / 100.0)
+    total = _money(subtotal - discount_amount)
+    return {
+        "cart": items,
+        "subtotal": subtotal,
+        "coupon_code": coupon_code,
+        "discount_percentage": discount_percentage,
+        "discount_amount": discount_amount,
+        "total": total,
+    }
 
 
 def fetch_cart_items_by_email(email):
+    return cart_quote(email)["cart"]
+
+
+def insert_cart_item(email, product_id, quantity):
+    quantity = parse_positive_int(quantity)
     db = get_db()
-    cursor = db.cursor()
-    
-    try:
-    
-        # Query cart items based on the user's email
-        cursor.execute('''SELECT products.name, products.price, cart.quantity, products.productID
-                        FROM cart
-                        INNER JOIN products ON cart.product_id = products.productID
-                        WHERE cart.email = ?''', (email,))
-        
-        cart_items = cursor.fetchall()
-        cursor.close()
-        
-        cart_items_list = []
-        for item in cart_items:
-            cart_item_dict = {
-                "name": item[0],
-                "price": item[1],
-                "quantity": item[2],
-                "productID": item[3]
-            }
-            cart_items_list.append(cart_item_dict)
+    product = db.execute(
+        """
+        SELECT p.productID, IFNULL(i.quantity, 0) AS stock
+        FROM products p
+        LEFT JOIN inventory i ON i.productID = p.productID
+        WHERE p.productID = ?
+        """,
+        (product_id,),
+    ).fetchone()
+    if not product:
+        raise AppError("Product not found.", 404)
+    existing = db.execute(
+        "SELECT quantity FROM cart WHERE email = ? AND product_id = ?",
+        (email, product_id),
+    ).fetchone()
+    new_quantity = quantity + (existing["quantity"] if existing else 0)
+    if product["stock"] < new_quantity:
+        raise AppError(
+            f"Insufficient stock for this product. Available in stock: {product['stock']}."
+        )
+    if existing:
+        db.execute(
+            "UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?",
+            (new_quantity, email, product_id),
+        )
+    else:
+        db.execute(
+            "INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, ?)",
+            (email, product_id, new_quantity),
+        )
+    db.commit()
 
-        return cart_items_list
-    
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
 
-def fetch_cart_items_by_email_for_checkout(email):
+def update_cart_item(email, product_id, quantity):
+    quantity = parse_positive_int(quantity)
     db = get_db()
-    cursor = db.cursor()
+    stock_row = db.execute(
+        "SELECT quantity FROM inventory WHERE productID = ?",
+        (product_id,),
+    ).fetchone()
+    stock = stock_row["quantity"] if stock_row else 0
+    if quantity > stock:
+        raise AppError(f"Insufficient stock for this product. Available in stock: {stock}.")
+    updated = db.execute(
+        "UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?",
+        (quantity, email, product_id),
+    )
+    if updated.rowcount == 0:
+        raise AppError("That product is not in your cart.", 404)
+    db.commit()
 
-    try:
-    
-        # Query cart items based on the user's email
-        cursor.execute('''SELECT products.name, products.price, cart.quantity, products.productID
-                        FROM cart
-                        INNER JOIN products ON cart.product_id = products.productID
-                        WHERE cart.email = ?''', (email,))
-        
-        cart_items = cursor.fetchall()
-        cursor.close()
-        return cart_items
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
 
-def apply_coupon(email, coupon_code):
-    db = get_db()
-    cursor = db.cursor()
-
-    try:
-        cursor.execute("SELECT discount_percentage FROM coupons WHERE coupon_code = ?", (coupon_code,))
-        coupon_data = cursor.fetchone()
-        
-        if coupon_data is None:
-            # Coupon code not found in the database
-            raise Exception('No such coupon code available.')
-        
-        # Check if the coupon code has already been used by the user
-        cursor.execute("SELECT * FROM used_coupons WHERE user_email = ? AND coupon_code = ?", (email, coupon_code))
-        used_coupon_data = cursor.fetchone()
-        
-        if used_coupon_data is not None:
-            # Coupon code has already been used by the user
-            raise Exception("You've already used this coupon code.")
-        
-        # Insert the coupon code into the used_coupons table
-        cursor.execute("INSERT INTO used_coupons (user_email, coupon_code) VALUES (?, ?)", (email, coupon_code))
-
-        db.commit()
-        db.close()
-        return int(coupon_data[0])
-    except Exception as e:
-        db.rollback()
-        db.close()
-        raise e
-    
-def empty_cart(email):
-    
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # Delete all cart items associated with the user's email
-        cursor.execute("DELETE FROM cart WHERE email = ?", (email,))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
 def delete_cart_item(email, product_id):
     db = get_db()
-    cursor = db.cursor()
-    try:
-        # Delete the cart item associated with the user's email and product ID
-        cursor.execute("DELETE FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
-def update_cart_item(email, product_id, quantity):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # Update the cart item associated with the user's email and product ID
-        if quantity == 0:
-            cursor.execute("DELETE FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
-        else:
-            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?", 
-                            (quantity, email, product_id))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+    db.execute(
+        "DELETE FROM cart WHERE email = ? AND product_id = ?",
+        (email, product_id),
+    )
+    db.commit()
 
 
-def record_order(email, order_date, cart_items, totalPrice):
+def apply_coupon(email, coupon_code):
+    """Attach a coupon to the cart. It is consumed only when checkout succeeds."""
+    code = (coupon_code or "").strip().upper()
+    if not code:
+        raise AppError("Enter a coupon code.")
     db = get_db()
-    cursor = db.cursor()
+    coupon = db.execute(
+        "SELECT coupon_code, discount_percentage FROM coupons WHERE coupon_code = ?",
+        (code,),
+    ).fetchone()
+    if not coupon:
+        raise AppError("No such coupon code available.")
+    used = db.execute(
+        "SELECT 1 FROM used_coupons WHERE user_email = ? AND coupon_code = ?",
+        (email, code),
+    ).fetchone()
+    if used:
+        raise AppError("You've already used this coupon code.")
+    db.execute(
+        """
+        INSERT INTO cart_coupons (email, coupon_code) VALUES (?, ?)
+        ON CONFLICT(email) DO UPDATE SET coupon_code = excluded.coupon_code
+        """,
+        (email, code),
+    )
+    db.commit()
+    quote = cart_quote(email)
+    quote["message"] = "Coupon code applied."
+    return quote
+
+
+def remove_coupon(email):
+    db = get_db()
+    db.execute("DELETE FROM cart_coupons WHERE email = ?", (email,))
+    db.commit()
+    return cart_quote(email)
+
+
+def checkout_order(email):
+    """Record an order and reduce stock for this user's cart only."""
+    db = get_db()
     try:
-        # Insert the order into the orders table
-        cursor.execute("INSERT INTO orders (email, order_date, total_price) VALUES (?, ?, ?)", (email, order_date, totalPrice))
+        rows = _cart_rows(db, email)
+        if not rows:
+            raise AppError("Your cart is empty.")
+        subtotal = 0.0
+        for row in rows:
+            if row["cart_quantity"] > row["stock"]:
+                raise AppError(
+                    f"Not enough inventory for '{row['name']}'. "
+                    f"Available: {row['stock']}, requested: {row['cart_quantity']}."
+                )
+            subtotal += row["price"] * row["cart_quantity"]
+        subtotal = _money(subtotal)
+        coupon_code, discount_percentage = _active_coupon(db, email)
+        discount_amount = _money(subtotal * discount_percentage / 100.0)
+        total = _money(subtotal - discount_amount)
+        cursor = db.execute(
+            """
+            INSERT INTO orders (email, order_date, total_price, coupon_code, discount_percentage)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (email, date.today().isoformat(), total, coupon_code, discount_percentage),
+        )
         order_id = cursor.lastrowid
-        
-        print(cart_items)
-        # Insert the order items into the order_items table
-        for cart_item in cart_items:
-            cursor.execute("INSERT INTO order_items (orderID, product_name, quantity) VALUES (?, ?, ?)", 
-                            (order_id, cart_item[0], cart_item[2]))
-        print(2)
+        items = []
+        for row in rows:
+            db.execute(
+                """
+                INSERT INTO order_items
+                    (orderID, product_id, product_name, quantity, unit_price)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (order_id, row["productID"], row["name"], row["cart_quantity"], row["price"]),
+            )
+            db.execute(
+                "UPDATE inventory SET quantity = quantity - ? WHERE productID = ?",
+                (row["cart_quantity"], row["productID"]),
+            )
+            items.append(
+                {
+                    "productID": row["productID"],
+                    "name": row["name"],
+                    "quantity": row["cart_quantity"],
+                    "price": row["price"],
+                }
+            )
+        if coupon_code:
+            db.execute(
+                "INSERT INTO used_coupons (user_email, coupon_code) VALUES (?, ?)",
+                (email, coupon_code),
+            )
+            db.execute("DELETE FROM cart_coupons WHERE email = ?", (email,))
+        db.execute("DELETE FROM cart WHERE email = ?", (email,))
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        cursor.close()
-        raise e
-    
-
-def update_inventory():
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # Update the inventory based on the cart items
-        cursor.execute("SELECT c.product_id, c.quantity, p.name FROM cart c JOIN products p ON c.product_id = p.productID")
-        cart_items = cursor.fetchall()
-        print(cart_items)
-        
-        for cart_item in cart_items:
-            cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (cart_item[0],))
-            inventory_quantity = cursor.fetchone()[0]
-            
-            if inventory_quantity < cart_item[1]:
-                raise Exception(f"Not enough inventory for product '{cart_item[2]}'. Available: {inventory_quantity}, Requested: {cart_item[1]}")
-
-            cursor.execute("UPDATE inventory SET quantity = quantity - ? WHERE productID = ?", 
-                            (cart_item[1], cart_item[0]))
-        
-        db.commit()
-        cursor.close()
-
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+        raise
+    return {
+        "success": "Checkout successful",
+        "order_id": order_id,
+        "cart_items": items,
+        "subtotal": subtotal,
+        "coupon_code": coupon_code,
+        "discount_percentage": discount_percentage,
+        "discount_amount": discount_amount,
+        "total": total,
+        "totalPrice": total,
+    }

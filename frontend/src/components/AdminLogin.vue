@@ -45,18 +45,20 @@ export default {
   methods: {
     async admin_login() {
       axios
-        .post("http://localhost:5000/api/admin/login", {
+        .post("/api/admin/login", {
           email: this.email,
           password: this.password,
         })
         .then((response) => {
           const accessToken = response.data.access_token;
           sessionStorage.setItem("accessToken", accessToken);
-          sessionStorage.setItem("admin", true);
+          sessionStorage.setItem("role", "admin");
+          sessionStorage.setItem("name", "Admin");
+          sessionStorage.setItem("admin", "true");
           this.$router.push("/admin/dashboard");
         })
         .catch((error) => {
-          console.error(error.response.data.error);
+          alert(error.response?.data?.error || "Login failed.");
         });
     },
   },

@@ -1,301 +1,279 @@
-from flask import Flask, render_template, request, redirect, session,url_for, flash, g, jsonify
-from applications.login_manager import *
-from applications.categories_functions import *
-from applications.cart_functions import *
-from applications.user_info import *
-from applications.search_functions import *
-from applications.database import *
-from applications.backend_tasks import *
-from applications.store_manager import *
+from functools import wraps
+
+from flask import jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
+
+from applications.ai_service import shopping_assistant, smart_search
+from applications.caching import cache
+from applications.cart_functions import (
+    apply_coupon,
+    cart_quote,
+    checkout_order,
+    delete_cart_item,
+    insert_cart_item,
+    remove_coupon,
+    update_cart_item,
+)
+from applications.catalog import get_categories, list_products, products_by_category, search_products
+from applications.catalog import get_product as fetch_product
+from applications.errors import AppError
+from applications.login_manager import login, signup
+from applications.ratings import list_reviews, upsert_review
+from applications.recommendations import recommend, recommend_for_cart, recommend_for_user
+from applications.store_manager import add_manager_apply, manager_status_check
+from applications.user_info import fetch_order_history, fetch_user_info
+from applications.wishlist import add_to_wishlist, list_wishlist, move_to_cart, remove_from_wishlist
 from flask import current_app as app
-from datetime import date
-from .caching import cache
-
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-
-@app.get('/say_hello')
-def say_hello_view():
-    task  = say_hello.delay()
-    return jsonify({"task-id": task.id})
-
-# @app.get('/create_resource_csv')
-# def download_csv():
-#     task = create_resource_csv.delay()
-#     return jsonify({"task-id": task.id})
 
 
-@app.route('/api/user_dashboard', methods=["GET"])
-@cache.cached(timeout=30)
-# @jwt_required()
-def index():
-    # print("Is this working")
-        # token=request.headers["Auth-token"]
-    if request.method == "GET":
+def api_view(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
         try:
-            products = get_10_products()
-            # email = get_jwt_identity()
-            # print("Received JWT identity:", email)
-            # if email:
-                # user = fetch_user_info(email)
-                # name = user['name']
-            response_data = {
-                "products": products,
-            }
-            
-            return jsonify(response_data)
-        
-        except Exception as e:
-            response_data = {"error": str(e)}
-            return jsonify(response_data)
+            return fn(*args, **kwargs)
+        except AppError as exc:
+            return jsonify({"error": exc.message}), exc.status
 
-@app.route("/api/getCategories", methods=['GET'])
-@cache.cached(timeout=50)
-def getCategories():
-    try:
-        categories = get_categories()
-        print(categories)
-        return jsonify(categories)
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/api/shopping_cart', methods=["GET"])
-@jwt_required()
-@cache.cached(timeout=10)
-def view_shopping_cart():
-    try:
-        email = get_jwt_identity()
-        cart_data = fetch_cart_items_by_email(email)
-        return jsonify({"cart": cart_data})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return wrapper
 
 
+def _json():
+    return request.get_json(silent=True) or {}
 
 
-@app.route('/api/add_to_cart', methods=["POST", "GET"])
-@jwt_required()
-def add_to_cart():
-    email = get_jwt_identity()
-    product_id = request.json.get('product_id')
-    quantity = request.json.get('quantity')
-
-    if not product_id or not quantity or int(quantity) <= 0:
-        return jsonify({"error": "Invalid product or quantity"})
-
-    try:
-        cache.clear()
-        insert_cart_item(email, product_id, quantity)
-        return jsonify({"success": "Product added to the cart successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+@app.get("/api/health")
+def health():
+    return jsonify({"status": "ok"})
 
 
-# @app.route('/shopping_cart', methods=['GET', 'POST'], endpoint='shopping_cart')
-# def shopping_cart():
-#     categories = get_categories()
-#     if 'email' not in session:
-#         return redirect(url_for('login_route'))
-    
-#     email = session['email']
-#     totalPrice = 0;
-#     try:
-#         cart_items = fetch_cart_items_by_email(email)
-#         for (name, price, quantity, productID) in cart_items:
-#             totalPrice += price * quantity
-
-#         email = session['email']
-#         user = get_user(email)
-#         name = user[1]
-
-#         coupon_code = request.form.get('coupon_code')
-#         if coupon_code:
-#             try:
-#                 discount_percentage = apply_coupon(email, coupon_code)
-#                 if discount_percentage is not None:
-#                     totalPrice -= totalPrice * (discount_percentage / 100)
-#                     flash('Coupon code applied')
-#             except Exception as e:
-#                 flash(str(e), "error")
-#                 return redirect('/shopping_cart')
-
-#         formatted_total_price = "{:.2f}".format(totalPrice)
-#         return render_template('shopping_cart.html', user=name,cart_items=cart_items, totalPrice=formatted_total_price, signed=True, categories=categories)
-#     except Exception as e:
-#         flash(str(e), "error")
-#         return redirect(url_for('index'))
-
-@app.route('/api/shopping_cart/update_product', methods=['GET','POST'])
-@jwt_required()
-def update_product():
-    email = get_jwt_identity()
-    try:
-        product_id = request.json.get('product_id')
-        quantity = request.json.get('quantity')
-        update_cart_item(email, product_id, quantity)
-        cache.clear()
-        print("ok")
-        return jsonify({"success":"Product quantity updated successfully."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
-
-@app.route('/api/shopping_cart/delete_product', methods=['POST', 'GET'])
-@jwt_required()
-def delete_product():
-    email = get_jwt_identity()
-    try:
-        product_id = request.json.get('product_id')
-        delete_cart_item(email, product_id)
-        cache.clear()
-        return jsonify({"success":"Product deleted successfully."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
-
-@app.route('/api/shopping_cart/checkout', methods=['POST', 'GET'])
-@jwt_required()
-def checkout():
-    email = get_jwt_identity()
-    print(email)    
-    try:
-        cache.clear()
-        cart_items = fetch_cart_items_by_email_for_checkout(email)
-        print(cart_items)
-        totalPrice = request.json.get('totalPrice')
-        print(totalPrice)
-        order_date = str(date.today())
-        update_inventory()
-        print("inventory updated")
-        record_order(email, order_date, cart_items, totalPrice)
-        print("Order recorded")
-        empty_cart(email)
-        print("Cart emptied")
-        
-        return jsonify({
-            "success": "Checkout successful",
-            "cart_items": cart_items,
-            "totalPrice": totalPrice
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/api/dashboard', methods=['GET'])
-@jwt_required()
+@app.get("/api/user_dashboard")
 @cache.cached(timeout=30)
+def index():
+    return jsonify({"products": list_products()})
+
+
+@app.get("/api/getCategories")
+@cache.cached(timeout=50)
+def categories():
+    return jsonify(get_categories())
+
+
+@app.get("/api/category/<int:category_id>")
+def products_by_category_route(category_id):
+    return jsonify({"products": products_by_category(category_id)})
+
+
+@app.post("/api/search")
+@api_view
+def search():
+    return jsonify(search_products(_json()))
+
+
+@app.post("/api/search/smart")
+@api_view
+def search_smart():
+    query = (_json().get("query") or _json().get("search_query") or "").strip()
+    if not query:
+        raise AppError("Enter a search.")
+    return jsonify(smart_search(query))
+
+
+@app.post("/api/assistant")
+@api_view
+def assistant():
+    message = (_json().get("message") or "").strip()
+    if not message:
+        raise AppError("Tell the assistant what you want to cook or buy.")
+    return jsonify(shopping_assistant(message))
+
+
+@app.get("/api/products/<int:product_id>")
+@api_view
+def product_detail(product_id):
+    product = fetch_product(product_id)
+    product["reviews"] = list_reviews(product_id)
+    product["bought_together"] = recommend([product_id], limit=4, context="product")
+    return jsonify({"product": product})
+
+
+@app.post("/api/products/<int:product_id>/reviews")
+@jwt_required()
+@api_view
+def create_review(product_id):
+    payload = _json()
+    review = upsert_review(
+        get_jwt_identity(),
+        product_id,
+        payload.get("rating"),
+        payload.get("body") or payload.get("review") or "",
+    )
+    cache.clear()
+    return jsonify({"success": "Review saved.", "review": review}), 201
+
+
+@app.get("/api/recommendations/popular")
+def popular():
+    return jsonify({"recommendations": recommend([], limit=6, context="cart")})
+
+
+@app.get("/api/recommendations/cart")
+@jwt_required()
+@api_view
+def cart_recommendations():
+    return jsonify({"recommendations": recommend_for_cart(get_jwt_identity())})
+
+
+@app.get("/api/recommendations/for-you")
+@jwt_required()
+@api_view
+def for_you():
+    return jsonify({"recommendations": recommend_for_user(get_jwt_identity())})
+
+
+@app.get("/api/shopping_cart")
+@jwt_required()
+@api_view
+def view_shopping_cart():
+    return jsonify(cart_quote(get_jwt_identity()))
+
+
+@app.post("/api/add_to_cart")
+@jwt_required()
+@api_view
+def add_to_cart():
+    payload = _json()
+    insert_cart_item(get_jwt_identity(), payload.get("product_id"), payload.get("quantity"))
+    cache.clear()
+    return jsonify({"success": "Product added to the cart successfully"})
+
+
+@app.post("/api/shopping_cart/update_product")
+@jwt_required()
+@api_view
+def update_product():
+    payload = _json()
+    update_cart_item(get_jwt_identity(), payload.get("product_id"), payload.get("quantity"))
+    cache.clear()
+    return jsonify({"success": "Product quantity updated successfully."})
+
+
+@app.post("/api/shopping_cart/delete_product")
+@jwt_required()
+@api_view
+def delete_product():
+    delete_cart_item(get_jwt_identity(), _json().get("product_id"))
+    cache.clear()
+    return jsonify({"success": "Product deleted successfully."})
+
+
+@app.post("/api/shopping_cart/apply_coupon")
+@jwt_required()
+@api_view
+def apply_coupon_route():
+    quote = apply_coupon(get_jwt_identity(), _json().get("coupon_code"))
+    return jsonify(quote)
+
+
+@app.post("/api/shopping_cart/remove_coupon")
+@jwt_required()
+@api_view
+def remove_coupon_route():
+    return jsonify(remove_coupon(get_jwt_identity()))
+
+
+@app.post("/api/shopping_cart/checkout")
+@jwt_required()
+@api_view
+def checkout():
+    # The client may still send totalPrice. It is not read.
+    result = checkout_order(get_jwt_identity())
+    cache.clear()
+    return jsonify(result)
+
+
+@app.get("/api/wishlist")
+@jwt_required()
+@api_view
+def wishlist():
+    return jsonify({"wishlist": list_wishlist(get_jwt_identity())})
+
+
+@app.post("/api/wishlist")
+@jwt_required()
+@api_view
+def wishlist_add():
+    add_to_wishlist(get_jwt_identity(), _json().get("product_id"))
+    return jsonify({"success": "Saved to your wishlist."})
+
+
+@app.delete("/api/wishlist/<int:product_id>")
+@jwt_required()
+@api_view
+def wishlist_remove(product_id):
+    remove_from_wishlist(get_jwt_identity(), product_id)
+    return jsonify({"success": "Removed from your wishlist."})
+
+
+@app.post("/api/wishlist/<int:product_id>/move-to-cart")
+@jwt_required()
+@api_view
+def wishlist_move(product_id):
+    quantity = _json().get("quantity", 1)
+    move_to_cart(get_jwt_identity(), product_id, quantity)
+    cache.clear()
+    return jsonify({"success": "Moved to your cart."})
+
+
+@app.get("/api/dashboard")
+@jwt_required()
+@api_view
 def user_dashboard():
     email = get_jwt_identity()
-
-    try:
-        user_info = fetch_user_info(email)
-        user_orders = fetch_order_history(email)
-        manager_status = manager_status_check(email)
-
-        return jsonify({
-            "user_info": user_info,
-            "user_orders": user_orders,
-            "manager_status": manager_status
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify(
+        {
+            "user_info": fetch_user_info(email),
+            "user_orders": fetch_order_history(email),
+            "manager_status": manager_status_check(email),
+        }
+    )
 
 
-@app.route('/api/login', methods=['POST', 'GET'])
+@app.post("/api/login")
+@api_view
 def login_route():
-        print("Doing nothing")
-        try:
-            data = request.get_json()
-            email = data.get('email')
-            password = data.get('password')
-            login(email, password)
-            user = fetch_user_info(email)
-            access_token = create_access_token(identity=email)
-            is_manager = manager_check(email)
-            return jsonify({'access_token': access_token, "name": user['name'], "is_manager": is_manager}), 200            
-        except Exception as e:
-            return jsonify({"message": "Error: "+str(e)}),500
+    payload = _json()
+    user = login(payload.get("email"), payload.get("password"))
+    profile = fetch_user_info(user["email"])
+    from flask_jwt_extended import create_access_token
+
+    token = create_access_token(identity=user["email"], additional_claims={"role": user["role"]})
+    return jsonify(
+        {
+            "access_token": token,
+            "name": profile["name"],
+            "role": user["role"],
+            "is_manager": user["role"] == "manager",
+        }
+    )
 
 
-
-@app.route('/api/signup', methods=['POST', 'GET'])
+@app.post("/api/signup")
+@api_view
 def signup_route():
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        name = data.get('name')
-        phone_number = data.get('phoneNo')
-        print(phone_number == "") # this is coming as true
-        address = data.get('address')
-        if not validate_email(email):  
-            raise Exception("Valid email required")
-        if not validate_phone_number(phone_number): 
-            raise Exception("Valid phone number required")
-        
-        signup(email, password)
-        add_user_info(email, name, phone_number, address)
-        return jsonify({"message":"Success"})
-    except Exception as e:
-        return jsonify({"Error": str(e)})
-
-@app.route('/api/category/<int:category_id>', methods=['GET'])
-def products_by_category(category_id):
-    try:
-        products = get_products_by_category(category_id)
-        return jsonify(products)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    payload = _json()
+    signup(
+        payload.get("email"),
+        payload.get("password"),
+        payload.get("name"),
+        payload.get("phoneNo") or payload.get("phone"),
+        payload.get("address"),
+    )
+    return jsonify({"message": "Success"}), 201
 
 
-@app.route('/api/search', methods=['POST', 'GET'])
-def search():
-    try:
-
-        search_query = request.json.get('search_query')
-        print(search_query)
-        min_price = request.json.get('min_price', 0)
-        max_price = request.json.get('max_price')
-        if max_price == 0: max_price = float('inf')
-        min_manufacture_date = request.json.get('min_manufacture_date', '')
-        max_manufacture_date = request.json.get('max_manufacture_date', '')
-        min_expiry_date = request.json.get('min_expiry_date', '')
-        max_expiry_date = request.json.get('max_expiry_date', '')
-        exclude_out_of_stock = request.json.get('exclude_out_of_stock')
-        
-        product_results = search_products_in_db(search_query.lower(), min_price, max_price,
-                                                min_manufacture_date, max_manufacture_date,
-                                                min_expiry_date, max_expiry_date, exclude_out_of_stock)
-        print(len(product_results))
-        category_results = search_categories_in_db(search_query.lower())
-        
-        response_data = { }
-
-        if product_results:
-            response_data["products"] = product_results
-        elif category_results:
-            response_data["category_results"] = category_results
-            products_in_category = get_products_by_category_search(category_results, min_price, max_price,
-                                                min_manufacture_date, max_manufacture_date,
-                                                min_expiry_date, max_expiry_date)
-            print("Products in category", products_in_category)
-            if products_in_category:
-                response_data["products_in_category"] = products_in_category
-            else:
-                response_data["no_results"] = True
-        else:
-            response_data["no_results"] = True
-        
-        print(response_data)
-        return jsonify(response_data)
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
-@app.route('/api/apply_manager', methods=['GET', 'POST'])
+@app.post("/api/apply_manager")
 @jwt_required()
+@api_view
 def apply_manager():
-    try:
-        email = get_jwt_identity()
-        print(email)
-        add_manager_apply(email)
-        return jsonify({"success": "Applied for manager status."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    add_manager_apply(get_jwt_identity())
+    return jsonify({"success": "Applied for manager status."})
