@@ -175,7 +175,14 @@ def _security_headers(response):
 def spa(path):
     dist = app.config["FRONTEND_DIST"]
     if path == "api" or path.startswith("api/"):
-        abort(404)
+        # The catch-all only matches GET, so a GET to a POST-only API route
+        # lands here; answer 405 for those rather than 404.
+        adapter = app.url_map.bind("")
+        try:
+            adapter.match("/" + path, method="POST")
+        except Exception:
+            abort(404)
+        abort(405)
     if path and os.path.isfile(os.path.join(dist, path)):
         response = send_from_directory(dist, path)
         if path.startswith("assets/"):

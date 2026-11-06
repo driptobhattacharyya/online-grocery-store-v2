@@ -61,7 +61,7 @@ const routes = [
     path: "/admin/add_product",
     name: "AddProduct",
     component: AddProduct,
-    meta: { ...ADMIN, title: "Add product" },
+    meta: { ...STAFF, title: "Add product" },
   },
   {
     path: "/admin/manager-requests",
