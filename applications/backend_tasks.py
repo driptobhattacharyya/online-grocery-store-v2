@@ -1,5 +1,4 @@
 from celery import shared_task
-import flask_excel as excel
 from applications.mail_service import *
 from applications.database import *
 from jinja2 import Template

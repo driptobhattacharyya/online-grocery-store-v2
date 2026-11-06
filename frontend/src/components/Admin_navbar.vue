@@ -79,14 +79,14 @@ export default {
       this.$router.push("/");
     },
     async download_report() {
-      const token = sessionStorage.getItem("access_token");
-      fetch("http://localhost:5000/api/manager/prepare_report"
-      // , {
-      //   headers: {
-      //     "Authorization": `Bearer ${this.token}`,
-      //   },}
-      )
-        .then((response) => response.blob())
+      const token = sessionStorage.getItem("accessToken");
+      fetch("/api/manager/prepare_report", {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.blob();
+        })
         .then((blob) => {
           const url = window.URL.createObjectURL(new Blob([blob]));
           const link = document.createElement("a");

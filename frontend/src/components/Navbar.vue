@@ -228,7 +228,7 @@ export default {
   methods: {
     async getCategories() {
       axios
-        .get("http://localhost:5000/api/getCategories")
+        .get("/api/getCategories")
         .then((response) => {
           this.categories = response.data;
           console.log(this.categories);
@@ -241,7 +241,7 @@ export default {
       console.log("Checking a particular category");
       // if (!this.data.length) {
       axios
-        .get(`http://localhost:5000/api/category/${categoryID}`)
+        .get(`/api/category/${categoryID}`)
         .then((response) => {
           this.data = response.data;
           console.log(this.data);
@@ -265,7 +265,7 @@ export default {
         console.log(searchQuery)
         
         
-        axios.post("http://localhost:5000/api/search", {
+        axios.post("/api/search", {
           search_query: searchQuery,
           min_price: this.search_filters.minPrice,
           max_price: this.search_filters.maxPrice,

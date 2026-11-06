@@ -121,7 +121,7 @@ export default {
       }
       axios
         .post(
-          "http://localhost:5000/manager/categories/add_category",
+          "/api/manager/categories/add_category",
           {
             category_name: this.newCategory.trim(),
           },
@@ -142,7 +142,7 @@ export default {
         console.log(categoryID);
         axios
           .post(
-            "http://localhost:5000/manager/categories/delete_category",
+            "/api/manager/categories/delete_category",
             {
               categoryID: categoryID,
             },
@@ -163,7 +163,7 @@ export default {
     getIems() {
       console.log(this.is_manager);
       axios
-        .get("http://localhost:5000/api/manager/dashboard", {
+        .get("/api/manager/dashboard", {
           mode: "no-cors",
           headers: {
             Authorization: "Bearer " + this.token,
@@ -204,7 +204,7 @@ export default {
           // Send delete request to backend
           axios
             .post(
-              "http://localhost:5000/api/manager/delete_product",
+              "/api/manager/delete_product",
               {
                 product_id: product.productID,
               },

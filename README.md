@@ -1,25 +1,94 @@
-# online-grocery-store-v2
-This is an enhanced version of the original Grocery Store project by me. Although it looks similar, it has various features, like mailing the user daily reminders and monthly reports. Also, there's caching for efficiency, downloading sales reports asynchronously, store manager role, etc. 
+# Online Grocery Store v2
 
-# Steps to run the project
-1. cd into the "Code" folder
-2. run "python app.py"
-3. cd into the "frontend" folder
-4. run "npm install". This might take a couple of seconds.
-5. run "npm run serve"
-6. Open on browser "localhost:8080"
-7. register on the page and login can be done
-8. All the user-end features can be used once logged in
+A full-stack grocery store with three roles — **shoppers**, **store managers** and an **admin** — built with **Flask** (REST API, JWT auth) and **Vue 3** (Vite, Vue Router, Bootstrap 5).
 
-To access the admin-end:
-1. Go to login
-2. Go to "manager login"
-3. username: admin    password: password
-4. Once logged in, all the manager-end features can be used
+## Features
 
-# Enable Mailing
-1. Ensure a Redis server is running on localhost:6379
-2. Ensure you have a mailing server setup, preferably Mailhog. To set up properly authenticated mailing (like Gmail), you need to make changes to the file "mail_service.py" under the "applications" folder.
-3. cd into the "Code" folder
-4. run "celery -A app:celery_app worker --loglevel INFO -P solo --concurrency 1" for celery worker
-5. run "celery -A app.celery_app beat --max-interval 1 -l info" for celery beat
+- Browse products, filter by category, search by name, price range, manufacture/expiry dates and stock
+- Shopping cart and checkout with live inventory updates
+- User dashboard with profile and order history
+- Users can apply to become a store manager; the admin approves or rejects requests
+- Managers and the admin can add, edit and delete products; the admin also manages categories
+- Downloadable sales report (CSV)
+- Response caching (Redis, or in-memory when Redis isn't configured)
+- Optional background jobs with Celery + Redis: daily reminder e-mails and monthly spending reports
+
+## Demo accounts
+
+A fresh database is created and seeded with a demo catalog on first start.
+
+| Role    | Login page        | Username / e-mail     | Password                                 |
+|---------|-------------------|-----------------------|------------------------------------------|
+| Shopper | `/login`          | `demo@grocery.app`    | `demo1234`                               |
+| Manager | `/login`          | `manager@grocery.app` | `manager1234`                            |
+| Admin   | `/admin/login`    | `admin`               | value of `ADMIN_PASSWORD` (default `password`) |
+
+## Run locally
+
+Requires Python 3.11+ and Node 20+.
+
+```bash
+# API (http://localhost:5000)
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+
+# Frontend dev server (http://localhost:8080), proxies /api to Flask
+cd frontend
+npm install
+npm run dev
+```
+
+To try the production setup locally, run `npm run build` in `frontend/`, then open http://localhost:5000: Flask serves the built app itself.
+
+Or with Docker:
+
+```bash
+docker build -t grocery-store .
+docker run -p 8000:8000 -e ADMIN_PASSWORD=change-me grocery-store
+# open http://localhost:8000
+```
+
+## Deploy
+
+The app ships as one Docker image: the Vue app is built and served by Flask/Gunicorn, so there is one service and no CORS setup.
+
+**Render (free tier):** push to GitHub, then in Render choose **New + → Blueprint** and select this repo. `render.yaml` generates the secret keys; set `ADMIN_PASSWORD` when prompted.
+
+Any Docker host works the same way (Fly.io, Railway, Google Cloud Run, a VPS). The container listens on `$PORT` (default 8000).
+
+> On free tiers the disk is ephemeral, so the SQLite database resets to the demo data on each redeploy or restart. For a portfolio demo that's useful, because it keeps the demo clean. To keep data, mount a volume and point `DATABASE_PATH` at it.
+
+### Configuration
+
+| Variable          | Default                  | Purpose                                          |
+|-------------------|--------------------------|--------------------------------------------------|
+| `SECRET_KEY`      | dev value                | Flask secret. **Set in production.**             |
+| `JWT_SECRET_KEY`  | `SECRET_KEY`             | Signs auth tokens. **Set in production.**        |
+| `ADMIN_USERNAME`  | `admin`                  | Admin login                                      |
+| `ADMIN_PASSWORD`  | `password`               | Admin password. **Set in production.**           |
+| `DATABASE_PATH`   | `./data/grocery.db`      | SQLite file, created and seeded if missing       |
+| `REDIS_URL`       | unset (in-memory cache)  | Enables the Redis cache and the Celery broker    |
+| `CORS_ORIGINS`    | unset                    | Comma-separated origins, only if the frontend is hosted separately |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SENDER_EMAIL` | `localhost:1025` (MailHog) | E-mail for background jobs |
+
+### Background e-mail jobs (optional)
+
+With Redis running and `REDIS_URL` set:
+
+```bash
+celery -A app:celery_app worker --loglevel INFO
+celery -A app:celery_app beat --loglevel INFO
+```
+
+[MailHog](https://github.com/mailhog/MailHog) on `localhost:1025` is handy for capturing the e-mails locally.
+
+## Project layout
+
+```
+app.py                 Flask app, Celery schedule, serves the built frontend
+applications/          API routes, auth helpers, DB access, background tasks
+frontend/              Vue 3 + Vite single-page app
+Dockerfile, render.yaml
+docs/                  Original project report
+```

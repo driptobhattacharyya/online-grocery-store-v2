@@ -7,10 +7,12 @@ def insert_cart_item(email, product_id, quantity):
     # Check if the product is available in the inventory with enough quantity
     cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (product_id,))
     available_quantity = cursor.fetchone()
-    
+    quantity = int(quantity)
+
     if available_quantity is None or available_quantity[0] < quantity:
         cursor.close()
-        raise Exception("Insufficient stock for this product. Available in stock:", available_quantity[0])
+        in_stock = available_quantity[0] if available_quantity else 0
+        raise Exception(f"Insufficient stock for this product. Available in stock: {in_stock}")
     
     try:
         # Check if the product is already in the cart for the user
@@ -185,14 +187,17 @@ def record_order(email, order_date, cart_items, totalPrice):
         raise e
     
 
-def update_inventory():
+def update_inventory(email):
     db = get_db()
     cursor = db.cursor()
     try:
-        # Update the inventory based on the cart items
-        cursor.execute("SELECT c.product_id, c.quantity, p.name FROM cart c JOIN products p ON c.product_id = p.productID")
+        # Update the inventory based on this user's cart items
+        cursor.execute(
+            "SELECT c.product_id, c.quantity, p.name FROM cart c JOIN products p ON c.product_id = p.productID "
+            "WHERE c.email = ?",
+            (email,),
+        )
         cart_items = cursor.fetchall()
-        print(cart_items)
         
         for cart_item in cart_items:
             cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (cart_item[0],))

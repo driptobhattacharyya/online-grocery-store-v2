@@ -49,7 +49,7 @@ export default {
   methods: {
     async login() {
       axios
-        .post("http://localhost:5000/api/login", {
+        .post("/api/login", {
           email: this.email,
           password: this.password,
         })

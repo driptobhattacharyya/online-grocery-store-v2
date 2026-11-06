@@ -101,7 +101,7 @@ export default {
         alert("Passwords do not match")
       } else{
         axios
-          .post("http://localhost:5000/api/signup", {
+          .post("/api/signup", {
             name: this.name,
             phoneNo: this.phoneNo,
             address: this.address,

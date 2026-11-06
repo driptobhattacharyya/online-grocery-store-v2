@@ -47,7 +47,7 @@ export default {
     if (!this.loading && !this.received_data.length) {
       this.loading = true;
       axios
-        .get("http://localhost:5000/api/user_dashboard")
+        .get("/api/user_dashboard")
         .then((response) => {
           this.received_data = response.data;
           this.products = this.received_data.products;

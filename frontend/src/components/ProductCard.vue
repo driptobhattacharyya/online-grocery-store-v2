@@ -62,7 +62,7 @@ export default {
         const token = sessionStorage.getItem("accessToken");
         console.log(token);
         axios
-          .post("http://localhost:5000/api/add_to_cart", {
+          .post("/api/add_to_cart", {
             "product_id": product_id,
             "quantity": count,
           },{

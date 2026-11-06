@@ -88,7 +88,7 @@ export default {
     getIems() {
       console.log(this.is_manager);
       axios
-        .get("http://localhost:5000/api/manager/dashboard", {
+        .get("/api/manager/dashboard", {
           params: {
             is_manager: this.is_manager,
           },
@@ -128,7 +128,7 @@ export default {
           // Send delete request to backend
           axios
             .post(
-              "http://localhost:5000/api/manager/delete_product",
+              "/api/manager/delete_product",
               {
                 product_id: product.productID,
               },

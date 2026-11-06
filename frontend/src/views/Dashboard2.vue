@@ -71,7 +71,7 @@ export default {
         const token = sessionStorage.getItem("accessToken");
         console.log(token);
         axios
-          .get("http://localhost:5000/api/dashboard", {
+          .get("/api/dashboard", {
             mode: "no-cors",
             headers: {
               Authorization: "Bearer " + token,
@@ -94,7 +94,7 @@ export default {
         const token = sessionStorage.getItem("accessToken");
         console.log(token);
         axios
-          .get("http://localhost:5000/api/apply_manager", {
+          .get("/api/apply_manager", {
             mode: "no-cors",
             headers: {
               Authorization: "Bearer " + token,

@@ -5,18 +5,18 @@ from applications.cart_functions import *
 from applications.user_info import *
 from applications.search_functions import *
 from applications.database import *
-from applications.backend_tasks import *
 from applications.store_manager import *
 from flask import current_app as app
 from datetime import date
 from .caching import cache
 
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from applications.auth import per_user_cache_key
 
-@app.get('/say_hello')
-def say_hello_view():
-    task  = say_hello.delay()
-    return jsonify({"task-id": task.id})
+
+@app.get('/api/health')
+def health():
+    return jsonify({"status": "ok"})
 
 # @app.get('/create_resource_csv')
 # def download_csv():
@@ -53,14 +53,13 @@ def index():
 def getCategories():
     try:
         categories = get_categories()
-        print(categories)
         return jsonify(categories)
     except Exception as e:
         return jsonify({"error": str(e)})
 
 @app.route('/api/shopping_cart', methods=["GET"])
 @jwt_required()
-@cache.cached(timeout=10)
+@cache.cached(timeout=10, key_prefix=per_user_cache_key)
 def view_shopping_cart():
     try:
         email = get_jwt_identity()
@@ -160,16 +159,13 @@ def checkout():
     try:
         cache.clear()
         cart_items = fetch_cart_items_by_email_for_checkout(email)
-        print(cart_items)
+        if not cart_items:
+            raise Exception("Your cart is empty")
         totalPrice = request.json.get('totalPrice')
-        print(totalPrice)
         order_date = str(date.today())
-        update_inventory()
-        print("inventory updated")
+        update_inventory(email)
         record_order(email, order_date, cart_items, totalPrice)
-        print("Order recorded")
         empty_cart(email)
-        print("Cart emptied")
         
         return jsonify({
             "success": "Checkout successful",
@@ -181,7 +177,7 @@ def checkout():
 
 @app.route('/api/dashboard', methods=['GET'])
 @jwt_required()
-@cache.cached(timeout=30)
+@cache.cached(timeout=30, key_prefix=per_user_cache_key)
 def user_dashboard():
     email = get_jwt_identity()
 
@@ -201,18 +197,17 @@ def user_dashboard():
 
 @app.route('/api/login', methods=['POST', 'GET'])
 def login_route():
-        print("Doing nothing")
         try:
             data = request.get_json()
             email = data.get('email')
             password = data.get('password')
             login(email, password)
             user = fetch_user_info(email)
-            access_token = create_access_token(identity=email)
             is_manager = manager_check(email)
+            access_token = create_access_token(identity=email, additional_claims={"role": "manager" if is_manager else "user"})
             return jsonify({'access_token': access_token, "name": user['name'], "is_manager": is_manager}), 200            
         except Exception as e:
-            return jsonify({"message": "Error: "+str(e)}),500
+            return jsonify({"message": "Error: "+str(e)}), 401
 
 
 
@@ -224,7 +219,6 @@ def signup_route():
         password = data.get('password')
         name = data.get('name')
         phone_number = data.get('phoneNo')
-        print(phone_number == "") # this is coming as true
         address = data.get('address')
         if not validate_email(email):  
             raise Exception("Valid email required")

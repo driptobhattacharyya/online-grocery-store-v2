@@ -45,7 +45,7 @@ export default {
   methods: {
     async admin_login() {
       axios
-        .post("http://localhost:5000/api/admin/login", {
+        .post("/api/admin/login", {
           email: this.email,
           password: this.password,
         })

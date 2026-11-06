@@ -1,17 +1,170 @@
+import os
 import sqlite3
-from flask import g
-from flask import current_app as app
+from datetime import date, timedelta
+
+from flask import g, current_app
+from werkzeug.security import generate_password_hash
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    email    TEXT NOT NULL UNIQUE PRIMARY KEY,
+    password TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_profiles (
+    email   TEXT NOT NULL PRIMARY KEY REFERENCES users(email),
+    name    TEXT NOT NULL,
+    address TEXT,
+    phone   TEXT
+);
+CREATE TABLE IF NOT EXISTS managers (
+    email    TEXT NOT NULL PRIMARY KEY,
+    password TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS store_manager (
+    email          TEXT PRIMARY KEY,
+    manager_status TEXT
+);
+CREATE TABLE IF NOT EXISTS categories (
+    categoryID    INTEGER PRIMARY KEY AUTOINCREMENT,
+    category_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS products (
+    productID        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT NOT NULL,
+    manufacture_date TEXT NOT NULL,
+    expiry_date      TEXT NOT NULL,
+    price            REAL NOT NULL,
+    dynamic_price    REAL,
+    is_recommended   INTEGER,
+    categoryID       INTEGER NOT NULL,
+    unit             TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inventory (
+    inventoryId INTEGER PRIMARY KEY AUTOINCREMENT,
+    productID   INTEGER NOT NULL UNIQUE REFERENCES products(productID),
+    quantity    INTEGER
+);
+CREATE TABLE IF NOT EXISTS cart (
+    cartID      INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT NOT NULL REFERENCES users(email),
+    product_id  INTEGER NOT NULL REFERENCES products(productID),
+    quantity    INTEGER NOT NULL,
+    isPurchased INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS coupons (
+    coupon_code         TEXT NOT NULL UNIQUE PRIMARY KEY,
+    discount_percentage REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS used_coupons (
+    user_email  TEXT NOT NULL REFERENCES users(email),
+    coupon_code TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orders (
+    orderID     INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT NOT NULL REFERENCES users(email),
+    order_date  TEXT,
+    total_price NUMERIC
+);
+CREATE TABLE IF NOT EXISTS order_items (
+    order_itemID INTEGER PRIMARY KEY AUTOINCREMENT,
+    orderID      INTEGER NOT NULL REFERENCES orders(orderID),
+    product_name TEXT NOT NULL,
+    quantity     INTEGER
+);
+"""
+
+# (category, [(name, price, unit, shelf_life_days, stock), ...])
+DEMO_CATALOG = [
+    ("Fruits & Vegetables", [
+        ("Apple", 180.0, "kg", 14, 60),
+        ("Banana", 48.0, "kg", 5, 132),
+        ("Carrot", 40.0, "kg", 10, 58),
+        ("Pineapple", 70.0, "piece", 7, 19),
+        ("Strawberry", 150.0, "pack", 4, 9),
+    ]),
+    ("Cold Drinks", [
+        ("Pepsi", 40.0, "bottle", 180, 97),
+        ("Sprite", 40.0, "bottle", 180, 8),
+    ]),
+    ("Dairy", [
+        ("Milk", 54.0, "litre", 3, 120),
+        ("Paneer", 90.0, "pack", 7, 50),
+    ]),
+    ("Poultry", [
+        ("Chicken", 260.0, "kg", 3, 44),
+        ("Egg", 7.0, "piece", 14, 1445),
+    ]),
+    ("Snacks", [
+        ("Maggi", 14.0, "packet", 270, 50),
+        ("Munch", 10.0, "packet", 120, 499),
+        ("Top Ramen", 35.0, "packet", 270, 400),
+    ]),
+]
+
+DEMO_COUPONS = [("FIRST50", 50.0), ("SAVE20", 20.0)]
+
+# Demo accounts so visitors can try every role without signing up.
+DEMO_USER = ("demo@grocery.app", "demo1234", "Demo Shopper", "1234567890", "221B Baker Street")
+DEMO_MANAGER = ("manager@grocery.app", "manager1234", "Demo Manager", "9876543210", "742 Evergreen Terrace")
 
 
-DATABASE = 'grocery_take1.db'
+def _database_path():
+    return current_app.config["DATABASE_PATH"]
+
 
 def get_db():
-    if 'db' not in g:
-        g.db = sqlite3.connect(DATABASE)
+    if "db" not in g:
+        g.db = sqlite3.connect(_database_path())
     return g.db
 
 
 def close_db(exception=None):
-    db = g.pop('db', None)
+    db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def init_db(app):
+    """Create the database (schema + demo data) if it doesn't exist yet."""
+    path = app.config["DATABASE_PATH"]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fresh = not os.path.exists(path)
+
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(SCHEMA)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO managers (email, password) VALUES (?, ?)",
+            (app.config["ADMIN_USERNAME"], generate_password_hash(app.config["ADMIN_PASSWORD"])),
+        )
+        if fresh:
+            _seed(cur)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _seed(cur):
+    today = date.today()
+    for category, products in DEMO_CATALOG:
+        cur.execute("INSERT INTO categories (category_name) VALUES (?)", (category,))
+        category_id = cur.lastrowid
+        for name, price, unit, shelf_life, stock in products:
+            cur.execute(
+                "INSERT INTO products (name, manufacture_date, expiry_date, price, categoryID, unit) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (name, (today - timedelta(days=1)).isoformat(),
+                 (today + timedelta(days=shelf_life)).isoformat(), price, category_id, unit),
+            )
+            cur.execute("INSERT INTO inventory (productID, quantity) VALUES (?, ?)", (cur.lastrowid, stock))
+
+    cur.executemany("INSERT INTO coupons (coupon_code, discount_percentage) VALUES (?, ?)", DEMO_COUPONS)
+
+    for email, password, name, phone, address in (DEMO_USER, DEMO_MANAGER):
+        cur.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, generate_password_hash(password)))
+        cur.execute(
+            "INSERT INTO user_profiles (email, name, address, phone) VALUES (?, ?, ?, ?)",
+            (email, name, address, phone),
+        )
+    cur.execute("INSERT INTO store_manager (email, manager_status) VALUES (?, 'approved')", (DEMO_MANAGER[0],))

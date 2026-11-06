@@ -111,7 +111,7 @@ export default {
   methods: {
     async getCategories() {
       axios
-        .get("http://localhost:5000/api/getCategories")
+        .get("/api/getCategories")
         .then((response) => {
           this.categories = response.data;
           console.log(this.categories);
@@ -139,7 +139,7 @@ export default {
       // Send POST request to create product
       axios
         .post(
-          "http://localhost:5000/api/manager/add_product",
+          "/api/manager/add_product",
           {
             product_name: this.newProduct.name,
             category: this.newProduct.category,

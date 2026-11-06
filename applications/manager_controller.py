@@ -6,14 +6,13 @@ from applications.cart_functions import *
 from applications.user_info import *
 from applications.search_functions import *
 from applications.manager_functions import *
-from applications.manager_coupons_functions import *
-from applications.manager_summary_functions import *
 from applications.database import *
 from applications.store_manager import *
 from flask import current_app as app
 from .caching import cache
 
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key
 
 
 
@@ -24,21 +23,19 @@ def manager_login_route(): #actually for the admin
         password = request.json.get('password')
     
         manager_login(email, password) #actually for the admin
-        access_token = create_access_token(identity=email)
-        return jsonify({'access_token': access_token}), 200     
+        access_token = create_access_token(identity=email, additional_claims={"role": "admin"})
+        return jsonify({'access_token': access_token}), 200
     except Exception as e:
         return jsonify({"error": str(e)})
 
 
 @app.route('/api/manager/dashboard', methods=['GET', 'POST'])
 @jwt_required()
-@cache.cached(timeout=30)
+@cache.cached(timeout=30, key_prefix=per_user_cache_key)
 def manager_dashboard_route():
     try:
         email = get_jwt_identity()
-        is_manager = request.args.get("is_manager")
-        print(is_manager, type(is_manager))
-        if ((email == "admin") or (is_manager == 'true')):
+        if is_manager_or_admin():
             print("Please give this manager the categories and products")
             categories = get_categories_with_products_from_db()            
             print(categories)
@@ -73,8 +70,7 @@ def getProduct():
 def add_product_route():
     try:
         email = get_jwt_identity()
-        is_manager = request.args.get("is_manager")
-        if ((email == "admin") or (is_manager == 'true')):
+        if is_manager_or_admin():
             category = request.json.get('category')
             product_name = request.json.get('product_name')
             quantity = request.json.get('quantity')
@@ -100,8 +96,7 @@ def edit_product():
     print(request.get_json())
     try:
         email = get_jwt_identity()
-        is_manager = request.json.get("is_manager")
-        if ((email == "admin") or (is_manager == 'true')):
+        if is_manager_or_admin():
             product_id = request.json.get('product_id')
             print(product_id)
             product_name = request.json.get('product_name')
@@ -136,9 +131,7 @@ def edit_product():
 def remove_product_route():        
     try:
         email = get_jwt_identity()
-        is_manager = request.args.get("is_manager")
-        print(is_manager)
-        if ((email == "admin") or (is_manager == 'true')):
+        if is_manager_or_admin():
             product_id = request.json.get('product_id')
             cache.clear()
             remove_product_from_db(product_id)
@@ -152,11 +145,11 @@ def remove_product_route():
         return jsonify({"error": str(e)})
 
 
-@app.route('/manager/categories/delete_category', methods=['GET','POST'])
+@app.route('/api/manager/categories/delete_category', methods=['GET','POST'])
 @jwt_required()
 def remove_category():
     email = get_jwt_identity()
-    if email != "admin":
+    if not is_admin():
         return jsonify({"error": "You are not authorized to perform this action."})
     
     try:
@@ -167,11 +160,11 @@ def remove_category():
     except Exception as e:
         return jsonify({"error":str(e)})
 
-@app.route('/manager/categories/add_category', methods=['GET','POST'])
+@app.route('/api/manager/categories/add_category', methods=['GET','POST'])
 @jwt_required()
 def add_category():
     email = get_jwt_identity()
-    if email != "admin":
+    if not is_admin():
         return jsonify({"error": "You are not authorized to perform this action."})
         
     
@@ -182,18 +175,17 @@ def add_category():
             add_category_to_db(category_name)
             return jsonify({"success":"Category added succesfully"})
     except Exception as e:
-        flash(str(e))
-    return redirect('/manager/dashboard')
+        return jsonify({"error": str(e)})
 
 import csv
+import io
 
 @app.route('/api/manager/prepare_report', methods=['GET','POST'])
-# @jwt_required()
+@jwt_required()
 def prepare_report():
     try:
-        # email = get_jwt_identity()
-        # if email != "admin":
-        #     return jsonify({"error": "You are not authorized to perform this action."})
+        if not is_manager_or_admin():
+            return jsonify({"error": "You are not authorized to perform this action."}), 403
         db = get_db()
         cursor=db.cursor()
         query = '''SELECT 
@@ -216,13 +208,9 @@ def prepare_report():
         for row in result:
             csv_data.append([row[0], row[1], row[2]])
         
-        file_path = 'sale_report.csv' 
-        with open(file_path, 'w', newline='') as csv_file:
-            csv_writer = csv.writer(csv_file)
-            csv_writer.writerows(csv_data)
-        
-        # Convert CSV data to bytes
-        csv_bytes = '\n'.join([','.join(map(str, row)) for row in csv_data]).encode('utf-8')
+        buffer = io.StringIO()
+        csv.writer(buffer).writerows(csv_data)
+        csv_bytes = buffer.getvalue().encode('utf-8')
         
         response = Response(csv_bytes, content_type='text/csv')
         response.headers['Content-Disposition'] = 'attachment; filename=order_report.csv'
@@ -239,7 +227,7 @@ def prepare_report():
 def manager_requests():
     try:
         email = get_jwt_identity()
-        if email != "admin":
+        if not is_admin():
             return jsonify({"error": "You are not authorized to perform this action."})
         manager_requests = get_manager_requests()
         return jsonify({"manager_requests": manager_requests})
@@ -251,7 +239,7 @@ def manager_requests():
 def accept_manager():
     try:
         email = get_jwt_identity()
-        if email != "admin":
+        if not is_admin():
             return jsonify({"error": "You are not authorized to perform this action."})
         manager_email = request.json.get('email')
         cache.clear()
@@ -265,7 +253,7 @@ def accept_manager():
 def reject_manager():
     try:
         email = get_jwt_identity()
-        if email != "admin":
+        if not is_admin():
             return jsonify({"error": "You are not authorized to perform this action."})
         manager_email = request.json.get('email')
         cache.clear()

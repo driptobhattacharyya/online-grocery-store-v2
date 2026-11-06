@@ -140,7 +140,7 @@ export default {
       try {
         console.log(this.token);
         axios
-          .get("http://localhost:5000/api/shopping_cart", {
+          .get("/api/shopping_cart", {
             mode: "no-cors",
             headers: {
               Authorization: "Bearer " + this.token,
@@ -167,7 +167,7 @@ export default {
     checkout() {
       try {
         axios.post(
-          "http://127.0.0.1:5000/api/shopping_cart/checkout",
+          "/api/shopping_cart/checkout",
           {
             "totalPrice": this.totalAmount,
           },
