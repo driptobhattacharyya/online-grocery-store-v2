@@ -21,7 +21,7 @@
 
           <option
             v-for="category in categories"
-            :key="category.id"
+            :key="category[0]"
             :value="category[1]"
           >
             {{ category[1] }}
@@ -79,30 +79,51 @@
           required
         />
       </div>
-      <button type="submit" class="btn btn-primary">Add Product</button>
+      <button type="submit" class="btn btn-primary" :disabled="saving">Add Product</button>
     </form>
   </div>
 </template>
 
 <script>
 import axios from "axios";
+import { getRole, homeFor } from "@/auth";
 import "@/assets/style_manager.css";
+
+const EMPTY_PRODUCT = {
+  name: "",
+  category: "",
+  quantity: 0,
+  price: 0,
+  unit: "",
+  manufacture_date: "",
+  expiry_date: "",
+};
+
+/** Returns an error message, or "" when the form is valid. */
+function validate(product) {
+  const missing = ["name", "category", "unit", "manufacture_date", "expiry_date"].some(
+    (field) => !String(product[field] ?? "").trim()
+  );
+  if (missing || product.quantity === "" || product.price === "") {
+    return "Please fill in all required fields!";
+  }
+  const quantity = Number(product.quantity);
+  if (!Number.isInteger(quantity) || quantity < 0) return "Stock must be a whole number (0 or more).";
+  if (!(Number(product.price) > 0)) return "Price must be greater than zero.";
+  if (product.expiry_date < product.manufacture_date) {
+    return "Expiry date cannot be before the manufacture date.";
+  }
+  return "";
+}
+
 export default {
   name: "AddProduct",
   data() {
     return {
+      newProduct: { ...EMPTY_PRODUCT },
       categories: [],
-      newProduct: {
-        name: "",
-        category: "",
-        quantity: 0,
-        price: 0,
-        unit: "",
-        manufacture_date: "",
-        expiry_date: "",
-      },
+      saving: false,
       token: sessionStorage.getItem("accessToken"),
-      is_manager: sessionStorage.getItem("is_manager"),
     };
   },
   mounted() {
@@ -110,83 +131,42 @@ export default {
   },
   methods: {
     async getCategories() {
-      axios
-        .get("/api/getCategories")
-        .then((response) => {
-          this.categories = response.data;
-          console.log(this.categories);
-        })
-        .catch((error) => {
-          alert("Error fetching data:", error);
-        });
+      try {
+        const response = await axios.get("/api/getCategories");
+        this.categories = response.data;
+      } catch (error) {
+        alert(error?.response?.data?.error || "Could not load categories.");
+      }
     },
-    createProduct() {
-      // Validate required fields
-      if (
-        !this.newProduct.name ||
-        !this.newProduct.category ||
-        !this.newProduct.quantity ||
-        !this.newProduct.price ||
-        !this.newProduct.unit ||
-        !this.newProduct.manufacture_date ||
-        !this.newProduct.expiry_date
-      ) {
-        alert("Please fill in all required fields!");
+    async createProduct() {
+      const problem = validate(this.newProduct);
+      if (problem) {
+        alert(problem);
         return;
       }
-      console.log(this.newProduct);
-
-      // Send POST request to create product
-      axios
-        .post(
+      this.saving = true;
+      try {
+        await axios.post(
           "/api/manager/add_product",
           {
-            product_name: this.newProduct.name,
+            product_name: this.newProduct.name.trim(),
             category: this.newProduct.category,
-            quantity: this.newProduct.quantity,
-            price: this.newProduct.price,
-            unit: this.newProduct.unit,
+            quantity: Number(this.newProduct.quantity),
+            price: Number(this.newProduct.price),
+            unit: this.newProduct.unit.trim(),
             manufacture_date: this.newProduct.manufacture_date,
             expiry_date: this.newProduct.expiry_date,
           },
-          {
-            params: {
-            is_manager: this.is_manager,
-          },
-            mode: "no-cors",
-            headers: {
-              Authorization: "Bearer " + this.token,
-            },
-          }
-        )
-        .then((response) => {
-            if (!response.error){
-                alert("Product added successfully!");
-                console.log(this.is_manager)
-                if (this.is_manager){
-                    this.$router.push("/StoreManager/dashboard");
-                }
-                else{
-                  this.$router.push("/admin/dashboard");
-                }
-                this.newProduct = {
-                  name: "",
-                  category: "",
-                  quantity: 0,
-                  price: 0,
-                  unit: "",
-                  manufacture_date: "",
-                  expiry_date: "",
-                };
-            
-            } else {
-                alert("Error adding product: " + response.error);
-            }
-        })
-        .catch((error) => {
-          console.error(error);
-          alert("Error creating product: " + error.message);
-        });
+          { headers: { Authorization: "Bearer " + this.token } }
+        );
+        alert("Product added successfully!");
+        this.newProduct = { ...EMPTY_PRODUCT };
+        this.$router.push(homeFor(getRole()));
+      } catch (error) {
+        alert(error?.response?.data?.error || "Could not add the product.");
+      } finally {
+        this.saving = false;
+      }
     },
   },
 };

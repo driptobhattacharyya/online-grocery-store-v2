@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Navbar :user="name" :signed="signed" @ChildEvent="handleChildEvent" />
+    <Navbar :user="name" :signed="signed" />
     <div class="container">
       <h1 class="cart-title">Your Shopping Cart</h1>
       <div class="row">
@@ -10,7 +10,7 @@
             <div
               class="col-12"
               v-for="cartItem in cartItems"
-              :key="cartItem.id"
+              :key="cartItem.productID"
             >
               <div class="mb-3">
                 <Cart_Item
@@ -24,35 +24,12 @@
           </div>
         </div>
         <div class="col-3 right-pane">
-          <!-- <form method="POST">
-            <div class="input-group mb-3">
-              <input
-                type="text"
-                class="form-control"
-                placeholder="Coupon Code"
-                aria-label="Coupon Code"
-                aria-describedby="apply-coupon-button"
-                v-model="couponCode"
-                name="coupon_code"
-              />
-              <button
-                class="btn btn-outline-secondary"
-                type="submit"
-                id="apply-coupon-button"
-                @click.prevent="applyCouponCode"
-              >
-                Apply
-              </button>
-            </div>
-          </form> -->
-          <div class="cart-total">Total: ₹{{ calculateTotalAmount() }}</div>
+          <div class="cart-total">Total: ₹{{ totalAmount.toFixed(2) }}</div>
           <div>
-            <input type="hidden" name="totalPrice" :value="totalAmount" />
             <button
-              type="submit"
+              type="button"
               class="btn btn-primary checkout-btn"
-              name="checkout"
-              value="true"
+              :disabled="checkingOut || cartItems.length === 0"
               @click="checkout"
             >
               Checkout
@@ -65,7 +42,7 @@
     <div v-if="cartItems.length === 0">
       <div class="card-body text-center">
         <h4>Your cart is empty.</h4>
-        <a href="/" class="btn btn-primary">Continue Shopping</a>
+        <router-link to="/" class="btn btn-primary">Continue Shopping</router-link>
       </div>
     </div>
   </div>
@@ -111,7 +88,6 @@
 import axios from "axios";
 import Cart_Item from "@/components/Cart_Item.vue";
 import Navbar from "@/components/Navbar.vue";
-import router from "@/router";
 import "../assets/style.css";
 
 export default {
@@ -122,67 +98,49 @@ export default {
   data() {
     return {
       cartItems: [],
-      couponCode: "",
-      totalAmount: 0,
       signed: false,
-      user: "",
+      name: "",
+      checkingOut: false,
       token: sessionStorage.getItem("accessToken"),
     };
   },
+  computed: {
+    // Estimate for display only; the server computes the real total at checkout.
+    totalAmount() {
+      return this.cartItems.reduce((total, item) => total + item.price * item.quantity, 0);
+    },
+  },
   mounted() {
     this.fetchCartItems();
-    this.signed = sessionStorage.getItem("signed");
+    this.signed = sessionStorage.getItem("signed") === "true";
     this.name = sessionStorage.getItem("name");
-    // console.log(sessionStorage.getItem("accessToken"))
   },
   methods: {
-    fetchCartItems() {
+    authHeaders() {
+      return { headers: { Authorization: "Bearer " + this.token } };
+    },
+    async fetchCartItems() {
       try {
-        console.log(this.token);
-        axios
-          .get("/api/shopping_cart", {
-            mode: "no-cors",
-            headers: {
-              Authorization: "Bearer " + this.token,
-            },
-          })
-          .then((response) => {
-            this.received_data = response.data;
-            console.log(this.received_data);
-            this.cartItems = this.received_data.cart;
-            console.log(this.cartItems);
-          });
-        // this.calculateTotalAmount();
+        const response = await axios.get("/api/shopping_cart", this.authHeaders());
+        this.cartItems = response.data.cart;
       } catch (error) {
-        console.error("Error:", error);
+        console.error("Error loading cart:", error);
+        alert(error?.response?.data?.error || "Could not load your cart.");
       }
     },
-    calculateTotalAmount() {
-      this.totalAmount = this.cartItems.reduce(
-        (total, item) => total + item.price * item.quantity,
-        0
-      );
-      return this.totalAmount;
-    },
-    checkout() {
+    async checkout() {
+      this.checkingOut = true;
       try {
-        axios.post(
-          "/api/shopping_cart/checkout",
-          {
-            "totalPrice": this.totalAmount,
-          },
-          {
-            mode: "no-cors",
-            headers: {
-              Authorization: "Bearer " + this.token,
-            },
-          }
-        );
-        sessionStorage.setItem('cartItems', JSON.stringify(this.cartItems));
-        sessionStorage.setItem('totalAmount', this.totalAmount);
-        this.$router.push("/order-confirmation")
+        const response = await axios.post("/api/shopping_cart/checkout", {}, this.authHeaders());
+        sessionStorage.setItem("cartItems", JSON.stringify(response.data.cart_items));
+        sessionStorage.setItem("totalAmount", response.data.totalPrice);
+        sessionStorage.setItem("orderId", response.data.order_id);
+        this.$router.push("/order-confirmation");
       } catch (error) {
-        console.error("Error:", error);
+        alert(error?.response?.data?.error || "Checkout failed. Please try again.");
+        this.fetchCartItems();
+      } finally {
+        this.checkingOut = false;
       }
     },
   },

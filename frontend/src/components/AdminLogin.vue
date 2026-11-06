@@ -3,6 +3,7 @@
     <h2>Admin Login</h2>
     <br />
     <br />
+    <div v-if="error" class="alert alert-danger" role="alert">{{ error }}</div>
     <form @submit.prevent="admin_login">
       <div class="mb-3">
         <label for="exampleInputEmail1" class="form-label">Username</label>
@@ -34,30 +35,42 @@
 <script>
 import axios from "axios";
 import "@/assets/style.css";
+import { logout } from "@/auth";
+
+// Only follow same-origin, path-only redirects ("/x", never "//host", "/\\host" or "http://").
+function safeRedirect(value, fallback) {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
+    ? value
+    : fallback;
+}
+
+function errorMessage(error) {
+  return error?.response?.data?.error || "Login failed. Please try again.";
+}
 
 export default {
   data() {
     return {
       email: "",
       password: "",
+      error: "",
     };
   },
   methods: {
     async admin_login() {
-      axios
-        .post("/api/admin/login", {
+      this.error = "";
+      try {
+        const response = await axios.post("/api/admin/login", {
           email: this.email,
           password: this.password,
-        })
-        .then((response) => {
-          const accessToken = response.data.access_token;
-          sessionStorage.setItem("accessToken", accessToken);
-          sessionStorage.setItem("admin", true);
-          this.$router.push("/admin/dashboard");
-        })
-        .catch((error) => {
-          console.error(error.response.data.error);
         });
+        logout(); // drop any keys left by a previous role
+        sessionStorage.setItem("accessToken", response.data.access_token);
+        sessionStorage.setItem("admin", true);
+        this.$router.push(safeRedirect(this.$route.query.redirect, "/admin/dashboard"));
+      } catch (error) {
+        this.error = errorMessage(error);
+      }
     },
   },
 };

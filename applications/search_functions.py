@@ -1,127 +1,67 @@
-from applications.database import *
+from applications.database import get_db
 
-def search_products_in_db(search_query, min_price, max_price,
-                            min_manufacture_date='', max_manufacture_date='',
-                            min_expiry_date='', max_expiry_date='', exclude_out_of_stock=False):
-    
-    db = get_db()
-    cursor = db.cursor()
+PRODUCT_FIELDS = ("productID", "name", "manufacture_date", "expiry_date", "price",
+                  "dynamic_price", "is_recommended", "categoryID", "unit")
+
+
+def _filters(min_price, max_price, min_manufacture_date, max_manufacture_date,
+             min_expiry_date, max_expiry_date, exclude_out_of_stock):
+    clauses = ["price >= ?"]
+    params = [min_price]
+    if max_price is not None:
+        clauses.append("price <= ?")
+        params.append(max_price)
+    for column, op, value in (("manufacture_date", ">=", min_manufacture_date),
+                              ("manufacture_date", "<=", max_manufacture_date),
+                              ("expiry_date", ">=", min_expiry_date),
+                              ("expiry_date", "<=", max_expiry_date)):
+        if value:
+            clauses.append(f"{column} {op} ?")
+            params.append(value)
+    if exclude_out_of_stock:
+        clauses.append("productID IN (SELECT productID FROM inventory WHERE quantity > 0)")
+    return clauses, params
+
+
+STOCK = "COALESCE((SELECT quantity FROM inventory WHERE inventory.productID = products.productID), 0)"
+
+
+def _query_products(where, params):
+    cursor = get_db().cursor()
     try:
-        query = """
-        SELECT *
-        FROM products
-        WHERE LOWER(name) LIKE ?
-        AND price >= ? AND price <= ?
-        """
-        params = [f"%{search_query}%", min_price, max_price]
-        
-        if min_manufacture_date:
-            query += " AND manufacture_date >= ?"
-            params.append(min_manufacture_date)
-        if max_manufacture_date:
-            query += " AND manufacture_date <= ?"
-            params.append(max_manufacture_date)
-        if min_expiry_date:
-            query += " AND expiry_date >= ?"
-            params.append(min_expiry_date)
-        if max_expiry_date:
-            query += " AND expiry_date <= ?"
-            params.append(max_expiry_date)
+        cursor.execute(
+            f"SELECT {', '.join(PRODUCT_FIELDS)}, {STOCK} FROM products WHERE {' AND '.join(where)}", params
+        )
+        return [dict(zip(PRODUCT_FIELDS + ("stock",), row)) for row in cursor.fetchall()]
+    finally:
+        cursor.close()
 
-        if exclude_out_of_stock:
-            query += " AND productID IN (SELECT productID FROM inventory WHERE quantity > 0)"
-        
-        # Execute the query and fetch the rows
-        cursor.execute(query, params)
-        products_list_1 = cursor.fetchall()
-        
-        cursor.close()
-        # return products_list
-        products_list = [
-            {
-                "productID": product[0],
-                "name": product[1],
-                "manufacture_date": product[2],
-                "expiry_date": product[3],
-                "price": product[4],
-                "dynamic_price": product[5],
-                "is_recommended": product[6],
-                "categoryID": product[7],
-                "unit": product[8]
-            }
-            for product in products_list_1
-        ]
-        
-        return products_list
-    except Exception as e:
-        cursor.close()
-        raise e
+
+def search_products_in_db(search_query, min_price=0, max_price=None,
+                          min_manufacture_date='', max_manufacture_date='',
+                          min_expiry_date='', max_expiry_date='', exclude_out_of_stock=False):
+    clauses, params = _filters(min_price, max_price, min_manufacture_date, max_manufacture_date,
+                               min_expiry_date, max_expiry_date, exclude_out_of_stock)
+    return _query_products(["LOWER(name) LIKE ?"] + clauses, [f"%{search_query}%"] + params)
 
 
 def search_categories_in_db(search_query):
-    db = get_db()
-    cursor = db.cursor()
-    
-    query = """
-        SELECT * FROM categories
-        WHERE LOWER(category_name) LIKE ?
-    """
-    results = cursor.execute(query, ('%' + search_query + '%',)).fetchall()
-    
-    print(results)
-    cursor.close()
-    return results
-
-def get_products_by_category_search(category_ids, min_price, max_price,
-                                        min_manufacture_date, max_manufacture_date,
-                                        min_expiry_date, max_expiry_date, exclude_out_of_stock=False):
-    # Query to get products from specified categories and apply filters
-    db = get_db()
-    cursor = db.cursor()
-    
+    cursor = get_db().cursor()
     try:
-        # Generate placeholders for the IN clause using parameter binding
-        category_id = category_ids[0][0]
-        print(category_id)
-        query = """
-        SELECT * FROM products
-        WHERE categoryID = ?
-        AND price >= ? AND price <= ?
-        AND (manufacture_date >= ? OR ? = '')
-        AND (manufacture_date <= ? OR ? = '')
-        AND (expiry_date >= ? OR ? = '')
-        AND (expiry_date <= ? OR ? = '')
-        """
+        cursor.execute("SELECT * FROM categories WHERE LOWER(category_name) LIKE ?", (f"%{search_query}%",))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
 
-        if exclude_out_of_stock:
-            query += " AND productID IN (SELECT productID FROM inventory WHERE quantity > 0)"
-        # Concatenate category IDs and other filter parameters
-        params = [category_id, min_price, max_price,
-                                min_manufacture_date, min_manufacture_date,
-                                max_manufacture_date, max_manufacture_date,
-                                min_expiry_date, min_expiry_date,
-                                max_expiry_date, max_expiry_date]
-        
-        cursor.execute(query, params)
-        filtered_products = cursor.fetchall()
-        cursor.close()
-        print("Filtered products", filtered_products)
-        products_list = [
-            {
-                "productID": product[0],
-                "name": product[1],
-                "manufacture_date": product[2],
-                "expiry_date": product[3],
-                "price": product[4],
-                "dynamic_price": product[5],
-                "is_recommended": product[6],
-                "categoryID": product[7],
-                "unit": product[8]
-            }
-            for product in filtered_products
-        ]
-        
-        return products_list
-    except Exception as e:
-        cursor.close()
-        raise e
+
+def get_products_by_category_search(category_rows, min_price=0, max_price=None,
+                                    min_manufacture_date='', max_manufacture_date='',
+                                    min_expiry_date='', max_expiry_date='', exclude_out_of_stock=False):
+    """Products in any of the matched categories, with the same filters applied."""
+    category_ids = [row[0] for row in category_rows]
+    if not category_ids:
+        return []
+    clauses, params = _filters(min_price, max_price, min_manufacture_date, max_manufacture_date,
+                               min_expiry_date, max_expiry_date, exclude_out_of_stock)
+    placeholders = ", ".join("?" for _ in category_ids)
+    return _query_products([f"categoryID IN ({placeholders})"] + clauses, category_ids + params)

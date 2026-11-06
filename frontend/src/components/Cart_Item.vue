@@ -5,7 +5,7 @@
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-center">
             <h5 class="card-title">{{ cartItem.name }}</h5>
-            <a @click="deleteItem" class="btn btn-sm delete-button">&#10006;</a>
+            <a @click="deleteItem" class="btn btn-sm delete-button" role="button" aria-label="Remove from cart">&#10006;</a>
           </div>
           <p class="card-text">Price: ₹{{ cartItem.price }}</p>
           <div class="d-flex align-items-center justify-content-center mb-3">
@@ -23,7 +23,7 @@
             </form>
           </div>
           <p class="card-text" style="font-weight: bold">
-            Total: ₹{{ cartItem.price * cartItem.quantity }}
+            Total: ₹{{ (cartItem.price * cartItem.quantity).toFixed(2) }}
           </p>
         </div>
       </div>
@@ -34,62 +34,56 @@
 <script>
 import "@/assets/style.css";
 import axios from "axios";
+
+function errorMessage(error, fallback) {
+  return error?.response?.data?.error || fallback;
+}
+
 export default {
   props: {
     cartItem: Object,
     token: String,
   },
+  emits: ["updateCart", "deleteItem"],
   data() {
     return {
       quantity: this.cartItem.quantity,
     };
   },
   methods: {
-    updateItem() {
-      if (this.quantity <= 0){
-        alert("Please enter a valid quantity")
-      } else{
-        try {
-          console.log(this.cartItem.productID, this.quantity);
-          const response = axios.post(
-            "/api/shopping_cart/update_product",
-            {
-              product_id: this.cartItem.productID,
-              quantity: this.quantity,
-            },
-            {
-              mode: "no-cors",
-              headers: {
-                Authorization: "Bearer " + this.token,
-              },
-            }
-          );
-          alert("Quantity updated")
-        } catch (error) {
-          console.error("Error:", error);
-        }
+    authHeaders() {
+      return { headers: { Authorization: "Bearer " + this.token } };
+    },
+    async updateItem() {
+      const quantity = Number(this.quantity);
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        alert("Please enter a valid quantity");
+        return;
+      }
+      try {
+        await axios.post(
+          "/api/shopping_cart/update_product",
+          { product_id: this.cartItem.productID, quantity },
+          this.authHeaders()
+        );
+        alert("Quantity updated");
+        this.$emit("updateCart");
+      } catch (error) {
+        alert(errorMessage(error, "Could not update the quantity."));
+        this.quantity = this.cartItem.quantity;
       }
     },
-    deleteItem() {
-      if (confirm("Are you sure you want to delete this item  from your cart")){
-        try {
-          axios.post(
-            "/api/shopping_cart/delete_product",
-            {
-              "product_id": this.cartItem.productID,
-            },
-            {
-              mode: "no-cors",
-              headers: {
-                Authorization: "Bearer " + this.token,
-              },
-            }
-          );
-          alert("Deleted from cart")
-          window.location.reload()
-        } catch (error) {
-          console.error("Error:", error);
-        }
+    async deleteItem() {
+      if (!confirm("Are you sure you want to delete this item from your cart?")) return;
+      try {
+        await axios.post(
+          "/api/shopping_cart/delete_product",
+          { product_id: this.cartItem.productID },
+          this.authHeaders()
+        );
+        this.$emit("deleteItem");
+      } catch (error) {
+        alert(errorMessage(error, "Could not remove the item."));
       }
     },
   },

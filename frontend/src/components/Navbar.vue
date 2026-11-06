@@ -50,29 +50,22 @@
             </ul>
           </li>
           <li class="nav-item" v-if="!signed">
-            <a class="nav-link" href="/signup">Register</a>
+            <router-link class="nav-link" to="/signup">Register</router-link>
           </li>
           <li class="nav-item" v-if="!signed">
-            <a class="nav-link" href="/login">Login</a>
+            <router-link class="nav-link" to="/login">Login</router-link>
           </li>
           <li class="nav-item" v-if="signed">
-            <a class="nav-link active" aria-current="page" href="/dashboard"
-              >Dashboard</a
-            >
+            <router-link class="nav-link active" to="/dashboard">Dashboard</router-link>
           </li>
           <li class="nav-item" v-if="signed">
-            <a class="nav-link active" aria-current="page" href="/shopping_cart"
-              >Cart</a
-            >
+            <router-link class="nav-link active" to="/shopping_cart">Cart</router-link>
           </li>
 
           <li class="nav-item" v-if="signed">
-            <a class="nav-link" href="#" @click="logout">Logout</a>
+            <a class="nav-link" href="#" @click.prevent="logout">Logout</a>
           </li>
           
-          <li class="nav-item" v-if="is_manager">
-            <a class="nav-link" href="/admin/dashboard" >Manager</a>
-          </li>
 
           <li class="nav-item dropdown" v-if="path == '/'">
             <a
@@ -164,7 +157,7 @@
                     <input
                       type="date"
                       class="form-control"
-                      v-model="search_filters.max_manufacture_date"
+                      v-model="search_filters.max_expiry_date"
                       name="max_expiry_date"
                     />
                   </div>
@@ -196,25 +189,26 @@
 
 <script>
 import axios from "axios";
+import { logout } from "@/auth";
+
 export default {
   props: {
     signed: Boolean,
     user: String,
   },
+  emits: ["ChildEvent"],
   data() {
     return {
-      data: [],
       categories: [],
-      is_manager: false,
-      search_filters:{
-        minPrice:0,
-        maxPrice: 0,
-        min_manufacture_date: 0,
-        max_manufacture_date: 0,
-        min_expiry_date:  "",
+      search_filters: {
+        minPrice: 0,
+        maxPrice: 0, // 0 = no upper limit
+        min_manufacture_date: "",
+        max_manufacture_date: "",
+        min_expiry_date: "",
         max_expiry_date: "",
-        exclude_OOS: false
-      }
+        exclude_OOS: false,
+      },
     };
   },
   mounted() {
@@ -227,71 +221,45 @@ export default {
   },
   methods: {
     async getCategories() {
-      axios
-        .get("/api/getCategories")
-        .then((response) => {
-          this.categories = response.data;
-          console.log(this.categories);
-        })
-        .catch((error) => {
-          alert("Error fetching data:", error);
-        });
-    },
-    category_products(categoryID) {
-      console.log("Checking a particular category");
-      // if (!this.data.length) {
-      axios
-        .get(`/api/category/${categoryID}`)
-        .then((response) => {
-          this.data = response.data;
-          console.log(this.data);
-          // send_data_to_parent();
-          if (this.$route.path === "/") {
-            this.$emit("ChildEvent", this.data);
-          } else {
-            this.$router.push("/");
-            console.log("Hi");
-            this.$emit("ChildEvent", this.data);
-          }
-        })
-        .catch((error) => {
-          console.error("Error fetching data:", error);
-        });
-      // }
-    },
-    search() {
       try {
-        const searchQuery = this.$refs.searchInput.value;
-        console.log(searchQuery)
-        
-        
-        axios.post("/api/search", {
-          search_query: searchQuery,
+        const response = await axios.get("/api/getCategories");
+        this.categories = response.data;
+      } catch (error) {
+        console.error("Error loading categories:", error);
+      }
+    },
+    async category_products(categoryID) {
+      try {
+        const response = await axios.get(`/api/category/${categoryID}`);
+        if (this.$route.path !== "/") {
+          await this.$router.push("/");
+        }
+        this.$emit("ChildEvent", response.data);
+      } catch (error) {
+        alert(error?.response?.data?.error || "Could not load this category.");
+      }
+    },
+    async search() {
+      try {
+        const response = await axios.post("/api/search", {
+          search_query: this.$refs.searchInput.value,
           min_price: this.search_filters.minPrice,
           max_price: this.search_filters.maxPrice,
           min_manufacture_date: this.search_filters.min_manufacture_date,
           max_manufacture_date: this.search_filters.max_manufacture_date,
           min_expiry_date: this.search_filters.min_expiry_date,
           max_expiry_date: this.search_filters.max_expiry_date,
-          exclude_out_of_stock: this.search_filters.exclude_OOS
-        })
-        .then((response) =>{
-          if(response.data.products){
-            this.$emit("ChildEvent", response.data.products);
-          }
-          else if(response.data.products_in_category){
-            this.$emit("ChildEvent", response.data.products_in_category);
-          }
-          else if(response.data.no_results){
-            alert("No results found");
-          }
-          
-        })
-        .catch((error) => {
-          console.error("Error fetching data:", error);
+          exclude_out_of_stock: this.search_filters.exclude_OOS,
         });
+        if (response.data.products) {
+          this.$emit("ChildEvent", response.data.products);
+        } else if (response.data.products_in_category) {
+          this.$emit("ChildEvent", response.data.products_in_category);
+        } else {
+          alert("No results found");
+        }
       } catch (error) {
-        console.error("Error performing search:", error);
+        alert(error?.response?.data?.error || "Search failed. Please try again.");
       }
     },
     goHome() {
@@ -302,9 +270,7 @@ export default {
       }
     },
     logout() {
-      sessionStorage.removeItem("accessToken");
-      sessionStorage.removeItem("signed");
-      sessionStorage.removeItem("name");
+      logout();
       alert("Logged out successfully");
       if (this.$route.path === "/") {
         window.location.reload();

@@ -1,263 +1,211 @@
-from flask import Flask, render_template, request, redirect, session,url_for, flash, g, jsonify, Response
-import sqlite3
-from applications.login_manager import *
-from applications.categories_functions import *
-from applications.cart_functions import *
-from applications.user_info import *
-from applications.search_functions import *
-from applications.manager_functions import *
-from applications.database import *
-from applications.store_manager import *
-from flask import current_app as app
-from .caching import cache
+"""Store-manager and admin API routes.
 
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key
-
-
-
-@app.route('/api/admin/login', methods=['GET', 'POST'])
-def manager_login_route(): #actually for the admin
-    try:
-        email = request.json.get('email')
-        password = request.json.get('password')
-    
-        manager_login(email, password) #actually for the admin
-        access_token = create_access_token(identity=email, additional_claims={"role": "admin"})
-        return jsonify({'access_token': access_token}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route('/api/manager/dashboard', methods=['GET', 'POST'])
-@jwt_required()
-@cache.cached(timeout=30, key_prefix=per_user_cache_key)
-def manager_dashboard_route():
-    try:
-        email = get_jwt_identity()
-        if is_manager_or_admin():
-            print("Please give this manager the categories and products")
-            categories = get_categories_with_products_from_db()            
-            print(categories)
-            return jsonify({"categories":categories})
-        else:
-            print("Not a manager or an admin")
-            raise Exception("You are not authorized to perform this action.")
-    except Exception as e:
-        return jsonify({"error":str(e)})
-    
-
-@app.route('/api/getProduct', methods=['GET'])
-def getProduct():
-    try:
-        product_id = request.json.get('product_id')
-        print(product_id)
-        categories = get_categories_with_products_from_db()            
-        print(categories)
-        for category in categories:
-            print("Category", category)
-            for product in category['products']:
-                print("Product", product)
-                if product['productID'] == product_id:
-                    print("Product:" , product)
-                    return jsonify({"product":product})
-    except Exception as e:
-        return jsonify({"Error":str(e)})
-
-
-@app.route('/api/manager/add_product', methods=['GET', 'POST'])
-@jwt_required()
-def add_product_route():
-    try:
-        email = get_jwt_identity()
-        if is_manager_or_admin():
-            category = request.json.get('category')
-            product_name = request.json.get('product_name')
-            quantity = request.json.get('quantity')
-            price = request.json.get('price')
-            unit = request.json.get('unit')
-            manufacture_date = request.json.get('manufacture_date')
-            expiry_date = request.json.get('expiry_date')
-            cache.clear()
-            add_product_to_category_in_db(category, product_name, quantity, manufacture_date, expiry_date, price, unit)
-            
-            return jsonify({"success": "Product added to the category."})
-        else:
-            print("Not a manager or an admin")
-            raise Exception("You are not authorized to perform this action.")
-
-    
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route('/api/manager/edit_product', methods=['GET', 'POST'])
-@jwt_required()
-def edit_product():
-    print(request.get_json())
-    try:
-        email = get_jwt_identity()
-        if is_manager_or_admin():
-            product_id = request.json.get('product_id')
-            print(product_id)
-            product_name = request.json.get('product_name')
-            print(product_name)
-            category = request.json.get('category')
-            print(category)
-            quantity = request.json.get('quantity')
-            print(quantity)
-            price = request.json.get('price')
-            print(price)
-            unit = request.json.get('unit')
-            print(unit)
-            manufacture_date = request.json.get('manufacture_date')
-            print(manufacture_date)
-            expiry_date = request.json.get('expiry_date')
-            print(expiry_date)
-            cache.clear()
-            update_product_in_db(product_id, product_name, category, quantity, price, unit, manufacture_date, expiry_date)
-            return jsonify({"success": "Product updated."})
-        
-        else:
-            print("Not a manager or an admin")
-            raise Exception("You are not authorized to perform this action.")
-    
-    except Exception as e:
-        print(str(e))
-        return jsonify({"error": str(e)}) 
-        
-
-@app.route('/api/manager/delete_product', methods=['GET', 'POST'])
-@jwt_required()
-def remove_product_route():        
-    try:
-        email = get_jwt_identity()
-        if is_manager_or_admin():
-            product_id = request.json.get('product_id')
-            cache.clear()
-            remove_product_from_db(product_id)
-            return jsonify({"success": "Product deleted."})
-            
-        else:
-            print("Not a manager or an admin")
-            raise Exception("You are not authorized to perform this action.")
-
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route('/api/manager/categories/delete_category', methods=['GET','POST'])
-@jwt_required()
-def remove_category():
-    email = get_jwt_identity()
-    if not is_admin():
-        return jsonify({"error": "You are not authorized to perform this action."})
-    
-    try:
-        categoryID = request.json.get('categoryID')
-        cache.clear()
-        remove_category_from_db(categoryID)
-        return jsonify({"success":"Category deleted successfully"})
-    except Exception as e:
-        return jsonify({"error":str(e)})
-
-@app.route('/api/manager/categories/add_category', methods=['GET','POST'])
-@jwt_required()
-def add_category():
-    email = get_jwt_identity()
-    if not is_admin():
-        return jsonify({"error": "You are not authorized to perform this action."})
-        
-    
-    try:
-            
-            category_name = request.json.get('category_name')
-            cache.clear()
-            add_category_to_db(category_name)
-            return jsonify({"success":"Category added succesfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
+Errors are returned as ``{"error": "<message>"}`` with a matching HTTP status
+(400 bad input, 401 bad credentials, 403 not allowed, 404 not found,
+409 conflict, 500 unexpected).
+"""
 import csv
 import io
 
-@app.route('/api/manager/prepare_report', methods=['GET','POST'])
+from flask import Response, current_app as app, jsonify
+from flask_jwt_extended import create_access_token, jwt_required
+
+from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key
+from applications.caching import cache
+from applications.cart_functions import product_exists
+from applications.categories_functions import get_category_id_by_name
+from applications.database import get_db
+from applications.http_errors import (
+    BadRequest, Forbidden, NotFound, api_errors, iso_date, json_body, number, only_ok,
+    positive_int, require_str,
+)
+from applications.login_manager import manager_login
+from applications.manager_functions import (
+    add_category_to_db, add_product_to_category_in_db, get_categories_with_products_from_db,
+    remove_category_from_db, remove_product_from_db, update_product_in_db,
+)
+from applications.store_manager import approve_manager, deny_manager, get_manager_requests
+
+NOT_AUTHORIZED = "You are not authorized to perform this action."
+
+
+def _require_manager_or_admin():
+    if not is_manager_or_admin():
+        raise Forbidden(NOT_AUTHORIZED)
+
+
+def _require_admin():
+    if not is_admin():
+        raise Forbidden(NOT_AUTHORIZED)
+
+
+def _required_id(data, field):
+    if data.get(field) in (None, ""):
+        raise BadRequest(f"{field} is required")
+    return positive_int(data.get(field), field)
+
+
+def _product_fields(data):
+    """Validate the body shared by add_product and edit_product."""
+    product_name = require_str(data, 'product_name', "Product name")
+    category_name = require_str(data, 'category', "Category")
+    unit = require_str(data, 'unit', "Unit")
+    for field, label in (('quantity', "Quantity"), ('price', "Price"),
+                         ('manufacture_date', "Manufacture date"), ('expiry_date', "Expiry date")):
+        if data.get(field) in (None, ""):
+            raise BadRequest(f"{label} is required")
+    quantity = positive_int(data.get('quantity'), "Quantity", allow_zero=True)
+    price = number(data.get('price'), "Price")
+    manufacture_date = iso_date(data.get('manufacture_date'), "Manufacture date")
+    expiry_date = iso_date(data.get('expiry_date'), "Expiry date")
+    if expiry_date < manufacture_date:
+        raise BadRequest("Expiry date cannot be before the manufacture date")
+    category_id = get_category_id_by_name(category_name)
+    if category_id is None:
+        raise NotFound(f"Category '{category_name}' not found")
+    return dict(product_name=product_name, category_id=category_id, quantity=quantity, price=price,
+                unit=unit, manufacture_date=manufacture_date, expiry_date=expiry_date)
+
+
+@app.route('/api/admin/login', methods=['POST'])
+@api_errors
+def manager_login_route():  # admin login
+    data = json_body()
+    email = require_str(data, 'email', "Username")
+    password = data.get('password')
+    if not isinstance(password, str) or not password:
+        raise BadRequest("Password is required")
+    manager_login(email, password)
+    access_token = create_access_token(identity=email, additional_claims={"role": "admin"})
+    return jsonify({'access_token': access_token})
+
+
+@app.route('/api/manager/dashboard', methods=['GET'])
 @jwt_required()
+@cache.cached(timeout=30, key_prefix=per_user_cache_key, response_filter=only_ok)
+@api_errors
+def manager_dashboard_route():
+    _require_manager_or_admin()
+    return jsonify({"categories": get_categories_with_products_from_db()})
+
+
+@app.route('/api/manager/add_product', methods=['POST'])
+@jwt_required()
+@api_errors
+def add_product_route():
+    _require_manager_or_admin()
+    fields = _product_fields(json_body())
+    add_product_to_category_in_db(
+        fields['category_id'], fields['product_name'], fields['quantity'], fields['manufacture_date'],
+        fields['expiry_date'], fields['price'], fields['unit'],
+    )
+    cache.clear()
+    return jsonify({"success": "Product added to the category."}), 201
+
+
+@app.route('/api/manager/edit_product', methods=['POST'])
+@jwt_required()
+@api_errors
+def edit_product():
+    _require_manager_or_admin()
+    data = json_body()
+    product_id = _required_id(data, 'product_id')
+    if not product_exists(product_id):
+        raise NotFound("Product not found")
+    fields = _product_fields(data)
+    update_product_in_db(
+        product_id, fields['product_name'], fields['category_id'], fields['quantity'], fields['price'],
+        fields['unit'], fields['manufacture_date'], fields['expiry_date'],
+    )
+    cache.clear()
+    return jsonify({"success": "Product updated."})
+
+
+@app.route('/api/manager/delete_product', methods=['POST'])
+@jwt_required()
+@api_errors
+def remove_product_route():
+    _require_manager_or_admin()
+    remove_product_from_db(_required_id(json_body(), 'product_id'))
+    cache.clear()
+    return jsonify({"success": "Product deleted."})
+
+
+@app.route('/api/manager/categories/delete_category', methods=['POST'])
+@jwt_required()
+@api_errors
+def remove_category():
+    _require_admin()
+    remove_category_from_db(_required_id(json_body(), 'categoryID'))
+    cache.clear()
+    return jsonify({"success": "Category deleted successfully"})
+
+
+@app.route('/api/manager/categories/add_category', methods=['POST'])
+@jwt_required()
+@api_errors
+def add_category():
+    _require_admin()
+    category_name = require_str(json_body(), 'category_name', "Category name")
+    add_category_to_db(category_name)
+    cache.clear()
+    return jsonify({"success": "Category added successfully"}), 201
+
+
+@app.route('/api/manager/prepare_report', methods=['GET'])
+@jwt_required()
+@api_errors
 def prepare_report():
+    _require_manager_or_admin()
+    cursor = get_db().cursor()
     try:
-        if not is_manager_or_admin():
-            return jsonify({"error": "You are not authorized to perform this action."}), 403
-        db = get_db()
-        cursor=db.cursor()
-        query = '''SELECT 
-                        order_items.product_name,
-                        SUM(order_items.quantity) AS total_quantity,
-                        SUM(order_items.quantity * products.price) AS total_price
-                    FROM 
-                        order_items
-                    INNER JOIN 
-                        products ON order_items.product_name = products.name
-                    GROUP BY 
-                        order_items.product_name;
-                    '''
-        
-        cursor.execute(query)
-        result = cursor.fetchall()
+        cursor.execute('''SELECT order_items.product_name,
+                                 SUM(order_items.quantity) AS total_quantity,
+                                 SUM(order_items.quantity * products.price) AS total_price
+                          FROM order_items
+                          INNER JOIN products ON order_items.product_name = products.name
+                          GROUP BY order_items.product_name''')
+        rows = cursor.fetchall()
+    finally:
         cursor.close()
 
-        csv_data = [['Product name', 'Quantity sold', 'Total amount']]
-        for row in result:
-            csv_data.append([row[0], row[1], row[2]])
-        
-        buffer = io.StringIO()
-        csv.writer(buffer).writerows(csv_data)
-        csv_bytes = buffer.getvalue().encode('utf-8')
-        
-        response = Response(csv_bytes, content_type='text/csv')
-        response.headers['Content-Disposition'] = 'attachment; filename=order_report.csv'
-        
-        return response
-    
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(['Product name', 'Quantity sold', 'Total amount'])
+    writer.writerows(rows)
+    response = Response(buffer.getvalue().encode('utf-8'), content_type='text/csv')
+    response.headers['Content-Disposition'] = 'attachment; filename=order_report.csv'
+    return response
+
 
 @app.route('/api/admin/manager_requests', methods=['GET'])
 @jwt_required()
-@cache.cached(timeout=20)
+@cache.cached(timeout=20, key_prefix=per_user_cache_key, response_filter=only_ok)
+@api_errors
 def manager_requests():
-    try:
-        email = get_jwt_identity()
-        if not is_admin():
-            return jsonify({"error": "You are not authorized to perform this action."})
-        manager_requests = get_manager_requests()
-        return jsonify({"manager_requests": manager_requests})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
+    _require_admin()
+    return jsonify({"manager_requests": get_manager_requests()})
+
+
+def _manager_email():
+    return require_str(json_body(), 'email', "email")
+
+
 @app.route('/api/admin/accept_manager', methods=['POST'])
 @jwt_required()
+@api_errors
 def accept_manager():
-    try:
-        email = get_jwt_identity()
-        if not is_admin():
-            return jsonify({"error": "You are not authorized to perform this action."})
-        manager_email = request.json.get('email')
-        cache.clear()
-        approve_manager(manager_email)
-        return jsonify({"success": "Manager request accepted."})
-    except Exception as e:
-        return jsonify({"error":str(e)})
-    
-@app.route('/api/admin/reject_manager', methods=['POST', 'GET'])
+    _require_admin()
+    approve_manager(_manager_email())
+    cache.clear()
+    return jsonify({"success": "Manager request accepted."})
+
+
+@app.route('/api/admin/reject_manager', methods=['POST'])
 @jwt_required()
+@api_errors
 def reject_manager():
-    try:
-        email = get_jwt_identity()
-        if not is_admin():
-            return jsonify({"error": "You are not authorized to perform this action."})
-        manager_email = request.json.get('email')
-        cache.clear()
-        deny_manager(manager_email)
-        return jsonify({"success": "Manager request rejected."})
-    except Exception as e:
-        return jsonify({"error":str(e)})
+    _require_admin()
+    deny_manager(_manager_email())
+    cache.clear()
+    return jsonify({"success": "Manager request rejected."})

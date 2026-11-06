@@ -26,11 +26,8 @@
           </li>
 
           <li class="nav-item">
-            <a
-              class="nav-link active"
-              aria-current="page"
-              href="/admin/manager-requests"
-              >ManagerRequests</a
+            <router-link class="nav-link active" to="/admin/manager-requests"
+              >ManagerRequests</router-link
             >
           </li>
 
@@ -54,17 +51,9 @@
 </template>
 
 <script>
-import axios from "axios";
+import { getToken, logout } from "@/auth";
+
 export default {
-  props: {},
-  data() {
-    return {
-      data: [],
-      categories: [],
-      is_manager: sessionStorage.getItem("is_manager"),
-    };
-  },
-  mounted() {},
   methods: {
     goHome() {
       if (this.$route.path === "/admin/dashboard") {
@@ -74,30 +63,31 @@ export default {
       }
     },
     logout() {
-      sessionStorage.removeItem("accessToken");
+      logout();
       alert("Logged out successfully");
       this.$router.push("/");
     },
     async download_report() {
-      const token = sessionStorage.getItem("accessToken");
-      fetch("/api/manager/prepare_report", {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((response) => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          return response.blob();
-        })
-        .then((blob) => {
-          const url = window.URL.createObjectURL(new Blob([blob]));
-          const link = document.createElement("a");
-          link.href = url;
-          link.setAttribute("download", "order_report.csv");
-          document.body.appendChild(link);
-          link.click();
-        })
-        .catch((error) => {
-          console.error("Error downloading order report:", error);
+      try {
+        const response = await fetch("/api/manager/prepare_report", {
+          headers: { Authorization: `Bearer ${getToken()}` },
         });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `Report download failed (HTTP ${response.status})`);
+        }
+        const url = window.URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", "order_report.csv");
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error("Error downloading order report:", error);
+        alert(error.message);
+      }
     },
   },
 };
