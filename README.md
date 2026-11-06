@@ -45,9 +45,15 @@ Or with Docker:
 
 ```bash
 docker build -t grocery-store .
-docker run -p 8000:8000 -e ADMIN_PASSWORD=change-me grocery-store
+docker run -p 8000:8000 \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e ADMIN_PASSWORD=choose-a-strong-one \
+  grocery-store
 # open http://localhost:8000
 ```
+
+The image runs with `APP_ENV=production`, so it refuses to start with missing or default secrets (keys must be at least 32 characters, admin password at least 8 and not `password`).
 
 ## Deploy
 
@@ -55,14 +61,19 @@ The app ships as one Docker image: the Vue app is built and served by Flask/Guni
 
 **Render (free tier):** push to GitHub, then in Render choose **New + → Blueprint** and select this repo. `render.yaml` generates the secret keys; set `ADMIN_PASSWORD` when prompted.
 
-Any Docker host works the same way (Fly.io, Railway, Google Cloud Run, a VPS). The container listens on `$PORT` (default 8000).
+Any Docker host works the same way (Fly.io, Railway, Google Cloud Run, a VPS). The container listens on `$PORT` (default 8000). Health checks: `/api/health` (process up) and `/api/ready` (database reachable).
+
+Production defaults: auth tokens expire after 12 hours, login and signup are rate-limited per IP, and responses carry a strict Content-Security-Policy and other security headers.
 
 > On free tiers the disk is ephemeral, so the SQLite database resets to the demo data on each redeploy or restart. For a portfolio demo that's useful, because it keeps the demo clean. To keep data, mount a volume and point `DATABASE_PATH` at it.
 
 ### Configuration
 
+The main settings are below; `.env.example` documents every variable (rate limits, token lifetime, proxy count, gunicorn tuning, CSP, logging).
+
 | Variable          | Default                  | Purpose                                          |
 |-------------------|--------------------------|--------------------------------------------------|
+| `APP_ENV`         | `development`            | `production` enables the startup secrets check and HSTS |
 | `SECRET_KEY`      | dev value                | Flask secret. **Set in production.**             |
 | `JWT_SECRET_KEY`  | `SECRET_KEY`             | Signs auth tokens. **Set in production.**        |
 | `ADMIN_USERNAME`  | `admin`                  | Admin login                                      |
@@ -89,6 +100,6 @@ celery -A app:celery_app beat --loglevel INFO
 app.py                 Flask app, Celery schedule, serves the built frontend
 applications/          API routes, auth helpers, DB access, background tasks
 frontend/              Vue 3 + Vite single-page app
-Dockerfile, render.yaml
+Dockerfile, gunicorn.conf.py, render.yaml, .env.example
 docs/                  Original project report
 ```

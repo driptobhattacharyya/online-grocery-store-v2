@@ -78,21 +78,3 @@ def monthly_report():
     for email in all_emails:
         send_message(email[0], subject, monthly_usage(email[0]))
     return "OK"
-
-@shared_task(ignore_result=True)
-def send_email(to, subject):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        query = '''SELECT email FROM users WHERE email LIKE '%@%' '''
-        cursor.execute(query)
-        all_emails = cursor.fetchall()
-        cursor.close()
-        for email in all_emails:
-            with open('test.html', 'r') as f:
-                template = Template(f.read())
-                send_message(email[0], subject, template.render(email=email[0]))
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        log.exception("send_email task failed")
