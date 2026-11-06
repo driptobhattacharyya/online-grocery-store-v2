@@ -1,5 +1,7 @@
+import logging
 import os
 import sqlite3
+import time
 from datetime import date, timedelta
 
 from flask import g, current_app
@@ -108,13 +110,37 @@ DEMO_USER = ("demo@grocery.app", "demo1234", "Demo Shopper", "1234567890", "221B
 DEMO_MANAGER = ("manager@grocery.app", "manager1234", "Demo Manager", "9876543210", "742 Evergreen Terrace")
 
 
+log = logging.getLogger(__name__)
+
+# Foreign-key enforcement (PRAGMA foreign_keys) is deliberately left OFF:
+# deleting a category removes its products while `inventory` and `cart` rows
+# still reference them, and deleting a product leaves `cart` rows pointing at
+# it. With enforcement on, those admin/manager delete flows would fail with
+# "FOREIGN KEY constraint failed". The REFERENCES clauses document intent only.
+
+
 def _database_path():
     return current_app.config["DATABASE_PATH"]
 
 
+def _connect(path, config, **kwargs):
+    # `timeout` sets SQLite's busy timeout: wait for locks instead of failing
+    # immediately with "database is locked".
+    return sqlite3.connect(path, timeout=config.get("SQLITE_BUSY_TIMEOUT", 15), **kwargs)
+
+
 def get_db():
+    """One connection per request/app context, closed by ``close_db``.
+
+    Connections are never shared between threads: each gunicorn thread handles
+    a request in its own app context, so sqlite3's ``check_same_thread`` default
+    is kept on as a safety net.
+    """
     if "db" not in g:
-        g.db = sqlite3.connect(_database_path())
+        g.db = _connect(_database_path(), current_app.config)
+        # WAL is persisted in the file by init_db; NORMAL is safe with WAL
+        # and avoids an fsync on every commit.
+        g.db.execute("PRAGMA synchronous=NORMAL")
     return g.db
 
 
@@ -124,25 +150,70 @@ def close_db(exception=None):
         db.close()
 
 
+def _schema_statements():
+    return [stmt.strip() for stmt in SCHEMA.split(";") if stmt.strip()]
+
+
+def _enable_wal(conn, timeout):
+    """Switch to WAL (persisted in the file). Changing the journal mode needs an
+    exclusive lock and SQLite doesn't always apply the busy timeout to it, so
+    retry while another process holds the database."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0].lower()
+            if mode == "wal":
+                return mode
+            return conn.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
+
+
 def init_db(app):
-    """Create the database (schema + demo data) if it doesn't exist yet."""
+    """Create the database (schema + demo data) if it doesn't exist yet.
+
+    Safe to run from several processes at once (web server, Celery worker and
+    beat all import the app): the whole check-create-seed sequence runs in one
+    ``BEGIN IMMEDIATE`` transaction, so the second process waits for the
+    first and then sees the tables already exist instead of seeding twice.
+    """
     path = app.config["DATABASE_PATH"]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fresh = not os.path.exists(path)
 
-    conn = sqlite3.connect(path)
+    conn = _connect(path, app.config, isolation_level=None)  # manual transaction control
     try:
-        conn.executescript(SCHEMA)
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO managers (email, password) VALUES (?, ?)",
-            (app.config["ADMIN_USERNAME"], generate_password_hash(app.config["ADMIN_PASSWORD"])),
-        )
-        if fresh:
-            _seed(cur)
-        conn.commit()
+        # Readers don't block the writer (and vice versa) in WAL mode.
+        mode = _enable_wal(conn, app.config.get("SQLITE_BUSY_TIMEOUT", 15))
+        if mode != "wal":
+            log.warning("SQLite journal_mode is %s (WAL not supported on this filesystem?)", mode)
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            fresh = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
+            ).fetchone() is None
+            for statement in _schema_statements():
+                conn.execute(statement)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO managers (email, password) VALUES (?, ?)",
+                (app.config["ADMIN_USERNAME"], generate_password_hash(app.config["ADMIN_PASSWORD"])),
+            )
+            if fresh:
+                _seed(cur)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     finally:
         conn.close()
+
+    if fresh:
+        log.info("Created new database with demo data at %s", path)
+    else:
+        log.info("Using existing database at %s", path)
 
 
 def _seed(cur):

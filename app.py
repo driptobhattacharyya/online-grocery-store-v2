@@ -1,17 +1,49 @@
+import logging
 import os
+import sys
 
-from flask import Flask, abort, send_from_directory
+from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import HTTPException, InternalServerError
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from applications.caching import cache
-from applications.config import Config
-from applications.database import close_db, init_db
+from applications.config import Config, validate_config
+from applications.database import close_db, get_db, init_db
 from applications.workers import celery_init_app
+
+
+def configure_logging(level):
+    """Log to stdout so Docker/Render/gunicorn collect everything in one stream."""
+    root = logging.getLogger()
+    if not any(getattr(h, "_grocery", False) for h in root.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(process)d] [%(levelname)s] %(name)s: %(message)s"))
+        handler._grocery = True
+        root.addHandler(handler)
+    root.setLevel(level)
+
 
 app = Flask(__name__)
 app.config.from_object(Config)
-app.app_context().push()
+configure_logging(app.config["LOG_LEVEL"])
+log = logging.getLogger("grocery")
+
+try:
+    validate_config(app.config)
+except Exception as exc:
+    log.critical("%s", exc)
+    raise
+
+# Behind a reverse proxy (Render), trust its X-Forwarded-For/-Proto headers so
+# request.remote_addr is the real client (used by the rate limiter) and
+# request.scheme is https.
+if app.config["TRUSTED_PROXY_COUNT"] > 0:
+    n = app.config["TRUSTED_PROXY_COUNT"]
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n, x_port=n)
 
 jwt = JWTManager(app)
 cache.init_app(app)
@@ -19,7 +51,28 @@ if app.config["CORS_ORIGINS"]:
     CORS(app, origins=app.config["CORS_ORIGINS"])
 app.teardown_appcontext(close_db)
 
+# In-memory storage is per process, which is consistent because gunicorn runs
+# a single worker (see gunicorn.conf.py); with REDIS_URL it is shared.
+limiter = Limiter(get_remote_address, app=app, storage_uri=app.config["RATELIMIT_STORAGE_URI"])
+
 init_db(app)
+
+
+# --- JWT errors: always JSON 401 ------------------------------------------------
+@jwt.expired_token_loader
+def _expired_token(jwt_header, jwt_payload):
+    return jsonify({"error": "Session expired, please log in again"}), 401
+
+
+@jwt.invalid_token_loader
+def _invalid_token(reason):
+    return jsonify({"error": "Invalid authorization token"}), 401
+
+
+@jwt.unauthorized_loader
+def _missing_token(reason):
+    return jsonify({"error": "Missing authorization token"}), 401
+
 
 # Background jobs (daily reminder + monthly report e-mails). Only active when
 # a Celery worker/beat is running against Redis; the web app works without it.
@@ -37,23 +90,107 @@ def setup_periodic_tasks(sender, **kwargs):
     )
 
 
-import applications.controllers  # noqa: E402,F401  (registers routes)
-import applications.manager_controller  # noqa: E402,F401
+# The route modules register themselves on `current_app` at import time.
+with app.app_context():
+    import applications.controllers  # noqa: E402,F401
+    import applications.manager_controller  # noqa: E402,F401
 
 
-# Serve the built Vue single-page app (frontend/dist) for every non-API path.
+# --- Rate limiting of credential endpoints ---------------------------------------
+# Applied here (rather than as decorators in the route modules) by wrapping the
+# already-registered view functions.
+for _endpoint in ("login_route", "manager_login_route", "signup_route"):
+    app.view_functions[_endpoint] = limiter.limit(app.config["AUTH_RATE_LIMIT"])(app.view_functions[_endpoint])
+
+
+@app.get("/api/ready")
+def ready():
+    """Readiness probe: like /api/health, but also checks the database."""
+    try:
+        get_db().execute("SELECT 1").fetchone()
+    except Exception:
+        log.exception("Readiness check failed")
+        return jsonify({"status": "unavailable"}), 503
+    return jsonify({"status": "ok"})
+
+
+# --- Error handlers: JSON under /api/ ---------------------------------------------
+def _is_api_request():
+    return request.path == "/api" or request.path.startswith("/api/")
+
+
+@app.errorhandler(HTTPException)
+def _http_error(exc):
+    if not _is_api_request():
+        return exc
+    response = exc.get_response()
+    if exc.code == 429:
+        message = "Too many attempts. Please wait a minute and try again."
+    else:
+        message = exc.description or exc.name
+    response.data = jsonify({"error": message}).get_data()
+    response.content_type = "application/json"
+    return response
+
+
+@app.errorhandler(Exception)
+def _unhandled_error(exc):
+    log.exception("Unhandled error on %s %s", request.method, request.path)
+    if _is_api_request():
+        return jsonify({"error": "Internal server error"}), 500
+    return InternalServerError()
+
+
+# --- Security and cache headers ---------------------------------------------------
+# The built Vite app loads only same-origin scripts/styles (Bootstrap is bundled);
+# Vue applies `style` bindings through the CSSOM, which CSP doesn't restrict.
+# Bootstrap's CSS uses data: SVGs for some icons.
+DEFAULT_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
+
+
+@app.after_request
+def _security_headers(response):
+    headers = response.headers
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    headers.setdefault("Content-Security-Policy", app.config["CONTENT_SECURITY_POLICY"] or DEFAULT_CSP)
+    if app.config["IS_PRODUCTION"]:
+        headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if _is_api_request():
+        # API responses are per-user (JWT); keep them out of shared caches.
+        headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+# --- Built Vue single-page app (frontend/dist) for every non-API path ---------------
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def spa(path):
     dist = app.config["FRONTEND_DIST"]
-    if path.startswith("api/"):
+    if path == "api" or path.startswith("api/"):
         abort(404)
     if path and os.path.isfile(os.path.join(dist, path)):
-        return send_from_directory(dist, path)
+        response = send_from_directory(dist, path)
+        if path.startswith("assets/"):
+            # Vite fingerprints everything under assets/, so it never changes.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+    if path.startswith("assets/"):
+        abort(404)  # a missing bundle must not be answered with index.html
     if os.path.isfile(os.path.join(dist, "index.html")):
-        return send_from_directory(dist, "index.html")
+        response = send_from_directory(dist, "index.html")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
     return "Frontend not built. Run `npm run build` in ./frontend, or use `npm run dev` for development.", 404
 
 
 if __name__ == "__main__":
-    app.run(debug=os.environ.get("FLASK_DEBUG", "1") == "1", port=int(os.environ.get("PORT", 5000)))
+    debug_default = "0" if app.config["IS_PRODUCTION"] else "1"
+    app.run(debug=os.environ.get("FLASK_DEBUG", debug_default) == "1", port=int(os.environ.get("PORT", 5000)))

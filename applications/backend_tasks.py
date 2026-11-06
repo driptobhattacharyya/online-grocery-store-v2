@@ -3,10 +3,13 @@ from applications.mail_service import *
 from applications.database import *
 from jinja2 import Template
 import datetime
+import logging
+
+log = logging.getLogger(__name__)
 
 @shared_task(ignore_result=False)
 def say_hello():
-    print('Hello there!')
+    log.info('Hello there!')
 
 
 # @shared_task(ignore_result=False)
@@ -92,4 +95,4 @@ def send_email(to, subject):
     except Exception as e:
         db.rollback()
         cursor.close()
-        print(e)
+        log.exception("send_email task failed")

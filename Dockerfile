@@ -8,15 +8,30 @@ RUN npm run build
 
 # --- Python runtime (Flask API + serves the built frontend) -----------------
 FROM python:3.13-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8000
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    APP_ENV=production \
+    PORT=8000
 WORKDIR /app
+
+# Dependencies first so code changes don't invalidate this layer.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py celeryconfig.py ./
+RUN pip install -r requirements.txt
+
+COPY app.py celeryconfig.py gunicorn.conf.py ./
 COPY applications/ ./applications/
 COPY --from=frontend /frontend/dist ./frontend/dist
-RUN useradd --create-home appuser && mkdir -p /app/data && chown appuser /app/data
+
+# Code stays root-owned (read-only for the app); only the data dir is writable.
+RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown appuser /app/data
 USER appuser
+
 EXPOSE 8000
-# One worker: SQLite + in-process cache are shared within a single process.
-CMD gunicorn app:app --bind 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 60
+# The slim image has no curl, so probe with Python's standard library.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('PORT', '8000'), timeout=4)" || exit 1
+
+# Settings (bind to $PORT, 1 worker x 4 threads, logging) are in gunicorn.conf.py.
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "app:app"]
