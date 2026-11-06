@@ -1,45 +1,54 @@
-from applications.database import *
+from applications.database import get_db
+
 
 def get_categories():
-    db = get_db()
-    cursor = db.cursor()
-    
-    cursor.execute("SELECT * FROM categories")
-    categories = cursor.fetchall()
-    cursor.close()
-    return categories
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT * FROM categories")
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+
+
+def category_exists(category_id):
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT 1 FROM categories WHERE categoryID = ?", (category_id,))
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def get_category_id_by_name(category_name):
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT categoryID FROM categories WHERE category_name = ?", (category_name,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    finally:
+        cursor.close()
+
 
 def get_products_by_category(category_id):
-    db = get_db()
-    cursor = db.cursor()
-    
+    """Same row shape as get_10_products: product columns, then inventoryId, productID, stock."""
+    cursor = get_db().cursor()
     try:
-        cursor.execute("SELECT * FROM products WHERE categoryID = ?", (category_id,))
-        product_rows = cursor.fetchall()
+        cursor.execute(
+            "SELECT products.*, inventory.inventoryId, products.productID, COALESCE(inventory.quantity, 0) "
+            "FROM products LEFT JOIN inventory ON products.productID = inventory.productID "
+            "WHERE products.categoryID = ?",
+            (category_id,),
+        )
+        return cursor.fetchall()
+    finally:
         cursor.close()
-        return product_rows
-        # products = []
-        # for row in product_rows:
-        #     product = {
-        #         "productID": row[0],
-        #         "name": row[1],
-        #         "manufacture_date": row[2],
-        #         "expiry_date": row[3],
-        #         "price": row[4],
-        #         "dynamic_price": row[5],
-        #         "is_recommended": bool(row[6]),  # Convert 0 or 1 to boolean
-        #         "categoryID": row[7],
-        #         "unit": row[8]
-        #     }
-        #     products.append(product)
-    except Exception as e:
-        cursor.close()
-        raise e
+
 
 def get_10_products():
-    db = get_db()
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM products INNER JOIN inventory ON products.productID = inventory.productID")
-    products = cursor.fetchall()
-    cursor.close()
-    return products
+    """All products with their inventory row (the name is historical)."""
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT * FROM products INNER JOIN inventory ON products.productID = inventory.productID")
+        return cursor.fetchall()
+    finally:
+        cursor.close()

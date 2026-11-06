@@ -1,295 +1,238 @@
-from flask import Flask, render_template, request, redirect, session,url_for, flash, g, jsonify
-from applications.login_manager import *
-from applications.categories_functions import *
-from applications.cart_functions import *
-from applications.user_info import *
-from applications.search_functions import *
-from applications.database import *
-from applications.store_manager import *
-from flask import current_app as app
-from datetime import date
-from .caching import cache
+"""Shopper-facing and authentication API routes.
 
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+Errors are returned as ``{"error": "<message>"}`` with a matching HTTP status
+(400 bad input, 401 bad credentials, 403 not allowed, 404 not found,
+409 conflict, 500 unexpected).
+"""
+from flask import current_app as app, jsonify, request
+from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
+
 from applications.auth import per_user_cache_key
+from applications.caching import cache
+from applications.cart_functions import (
+    checkout_cart, delete_cart_item, fetch_cart_items_by_email, insert_cart_item, update_cart_item,
+)
+from applications.categories_functions import category_exists, get_10_products, get_categories, get_products_by_category
+from applications.http_errors import (
+    BadRequest, NotFound, api_errors, json_body, number, only_ok, optional_date,
+    positive_int, require_str,
+)
+from applications.login_manager import login, register_user, validate_email, validate_phone_number
+from applications.search_functions import (
+    get_products_by_category_search, search_categories_in_db, search_products_in_db,
+)
+from applications.store_manager import add_manager_apply, manager_check, manager_status_check
+from applications.user_info import fetch_order_history, fetch_user_info
 
 
 @app.get('/api/health')
 def health():
     return jsonify({"status": "ok"})
 
-# @app.get('/create_resource_csv')
-# def download_csv():
-#     task = create_resource_csv.delay()
-#     return jsonify({"task-id": task.id})
-
 
 @app.route('/api/user_dashboard', methods=["GET"])
-@cache.cached(timeout=30)
-# @jwt_required()
+@cache.cached(timeout=30, response_filter=only_ok)
+@api_errors
 def index():
-    # print("Is this working")
-        # token=request.headers["Auth-token"]
-    if request.method == "GET":
-        try:
-            products = get_10_products()
-            # email = get_jwt_identity()
-            # print("Received JWT identity:", email)
-            # if email:
-                # user = fetch_user_info(email)
-                # name = user['name']
-            response_data = {
-                "products": products,
-            }
-            
-            return jsonify(response_data)
-        
-        except Exception as e:
-            response_data = {"error": str(e)}
-            return jsonify(response_data)
+    return jsonify({"products": get_10_products()})
+
 
 @app.route("/api/getCategories", methods=['GET'])
-@cache.cached(timeout=50)
+@cache.cached(timeout=50, response_filter=only_ok)
+@api_errors
 def getCategories():
-    try:
-        categories = get_categories()
-        return jsonify(categories)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify(get_categories())
+
+
+@app.route('/api/category/<int:category_id>', methods=['GET'])
+@api_errors
+def products_by_category(category_id):
+    if not category_exists(category_id):
+        raise NotFound("Category not found")
+    return jsonify(get_products_by_category(category_id))
+
+
+# --- cart -------------------------------------------------------------------
+
+def _product_id(data):
+    if data.get('product_id') in (None, ""):
+        raise BadRequest("product_id is required")
+    return positive_int(data.get('product_id'), "product_id")
+
 
 @app.route('/api/shopping_cart', methods=["GET"])
 @jwt_required()
-@cache.cached(timeout=10, key_prefix=per_user_cache_key)
+@cache.cached(timeout=10, key_prefix=per_user_cache_key, response_filter=only_ok)
+@api_errors
 def view_shopping_cart():
-    try:
-        email = get_jwt_identity()
-        cart_data = fetch_cart_items_by_email(email)
-        return jsonify({"cart": cart_data})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify({"cart": fetch_cart_items_by_email(get_jwt_identity())})
 
 
-
-
-@app.route('/api/add_to_cart', methods=["POST", "GET"])
+@app.route('/api/add_to_cart', methods=["POST"])
 @jwt_required()
+@api_errors
 def add_to_cart():
-    email = get_jwt_identity()
-    product_id = request.json.get('product_id')
-    quantity = request.json.get('quantity')
-
-    if not product_id or not quantity or int(quantity) <= 0:
-        return jsonify({"error": "Invalid product or quantity"})
-
-    try:
-        cache.clear()
-        insert_cart_item(email, product_id, quantity)
-        return jsonify({"success": "Product added to the cart successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    data = json_body()
+    product_id = _product_id(data)
+    if data.get('quantity') in (None, ""):
+        raise BadRequest("quantity is required")
+    quantity = positive_int(data.get('quantity'), "Quantity")
+    insert_cart_item(get_jwt_identity(), product_id, quantity)
+    cache.clear()
+    return jsonify({"success": "Product added to the cart successfully"})
 
 
-# @app.route('/shopping_cart', methods=['GET', 'POST'], endpoint='shopping_cart')
-# def shopping_cart():
-#     categories = get_categories()
-#     if 'email' not in session:
-#         return redirect(url_for('login_route'))
-    
-#     email = session['email']
-#     totalPrice = 0;
-#     try:
-#         cart_items = fetch_cart_items_by_email(email)
-#         for (name, price, quantity, productID) in cart_items:
-#             totalPrice += price * quantity
-
-#         email = session['email']
-#         user = get_user(email)
-#         name = user[1]
-
-#         coupon_code = request.form.get('coupon_code')
-#         if coupon_code:
-#             try:
-#                 discount_percentage = apply_coupon(email, coupon_code)
-#                 if discount_percentage is not None:
-#                     totalPrice -= totalPrice * (discount_percentage / 100)
-#                     flash('Coupon code applied')
-#             except Exception as e:
-#                 flash(str(e), "error")
-#                 return redirect('/shopping_cart')
-
-#         formatted_total_price = "{:.2f}".format(totalPrice)
-#         return render_template('shopping_cart.html', user=name,cart_items=cart_items, totalPrice=formatted_total_price, signed=True, categories=categories)
-#     except Exception as e:
-#         flash(str(e), "error")
-#         return redirect(url_for('index'))
-
-@app.route('/api/shopping_cart/update_product', methods=['GET','POST'])
+@app.route('/api/shopping_cart/update_product', methods=['POST'])
 @jwt_required()
+@api_errors
 def update_product():
-    email = get_jwt_identity()
-    try:
-        product_id = request.json.get('product_id')
-        quantity = request.json.get('quantity')
-        update_cart_item(email, product_id, quantity)
-        cache.clear()
-        print("ok")
-        return jsonify({"success":"Product quantity updated successfully."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
+    data = json_body()
+    product_id = _product_id(data)
+    if data.get('quantity') in (None, ""):
+        raise BadRequest("quantity is required")
+    quantity = positive_int(data.get('quantity'), "Quantity", allow_zero=True)
+    update_cart_item(get_jwt_identity(), product_id, quantity)
+    cache.clear()
+    return jsonify({"success": "Product quantity updated successfully."})
 
-@app.route('/api/shopping_cart/delete_product', methods=['POST', 'GET'])
+
+@app.route('/api/shopping_cart/delete_product', methods=['POST'])
 @jwt_required()
+@api_errors
 def delete_product():
-    email = get_jwt_identity()
-    try:
-        product_id = request.json.get('product_id')
-        delete_cart_item(email, product_id)
-        cache.clear()
-        return jsonify({"success":"Product deleted successfully."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
+    product_id = _product_id(json_body())
+    delete_cart_item(get_jwt_identity(), product_id)
+    cache.clear()
+    return jsonify({"success": "Product deleted successfully."})
 
-@app.route('/api/shopping_cart/checkout', methods=['POST', 'GET'])
+
+@app.route('/api/shopping_cart/checkout', methods=['POST'])
 @jwt_required()
+@api_errors
 def checkout():
-    email = get_jwt_identity()
-    print(email)    
-    try:
-        cache.clear()
-        cart_items = fetch_cart_items_by_email_for_checkout(email)
-        if not cart_items:
-            raise Exception("Your cart is empty")
-        totalPrice = request.json.get('totalPrice')
-        order_date = str(date.today())
-        update_inventory(email)
-        record_order(email, order_date, cart_items, totalPrice)
-        empty_cart(email)
-        
-        return jsonify({
-            "success": "Checkout successful",
-            "cart_items": cart_items,
-            "totalPrice": totalPrice
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    # The total is computed from the cart and current prices on the server;
+    # anything the client sends in the body is ignored.
+    order_id, items, total = checkout_cart(get_jwt_identity())
+    cache.clear()
+    return jsonify({
+        "success": "Checkout successful",
+        "order_id": order_id,
+        "cart_items": items,
+        "totalPrice": total,
+    })
+
+
+# --- account ----------------------------------------------------------------
 
 @app.route('/api/dashboard', methods=['GET'])
 @jwt_required()
-@cache.cached(timeout=30, key_prefix=per_user_cache_key)
+@cache.cached(timeout=30, key_prefix=per_user_cache_key, response_filter=only_ok)
+@api_errors
 def user_dashboard():
     email = get_jwt_identity()
-
-    try:
-        user_info = fetch_user_info(email)
-        user_orders = fetch_order_history(email)
-        manager_status = manager_status_check(email)
-
-        return jsonify({
-            "user_info": user_info,
-            "user_orders": user_orders,
-            "manager_status": manager_status
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    user_info = fetch_user_info(email)
+    if user_info is None:
+        raise NotFound("User profile not found")
+    return jsonify({
+        "user_info": user_info,
+        "user_orders": fetch_order_history(email),
+        "manager_status": manager_status_check(email),
+    })
 
 
-@app.route('/api/login', methods=['POST', 'GET'])
+@app.route('/api/login', methods=['POST'])
+@api_errors
 def login_route():
-        try:
-            data = request.get_json()
-            email = data.get('email')
-            password = data.get('password')
-            login(email, password)
-            user = fetch_user_info(email)
-            is_manager = manager_check(email)
-            access_token = create_access_token(identity=email, additional_claims={"role": "manager" if is_manager else "user"})
-            return jsonify({'access_token': access_token, "name": user['name'], "is_manager": is_manager}), 200            
-        except Exception as e:
-            return jsonify({"message": "Error: "+str(e)}), 401
+    data = json_body()
+    email = require_str(data, 'email', "Email")
+    password = data.get('password')
+    if not isinstance(password, str) or not password:
+        raise BadRequest("Password is required")
+    login(email, password)
+    user = fetch_user_info(email)
+    is_manager = manager_check(email)
+    access_token = create_access_token(
+        identity=email, additional_claims={"role": "manager" if is_manager else "user"}
+    )
+    return jsonify({
+        'access_token': access_token,
+        "name": user['name'] if user else email,
+        "is_manager": is_manager,
+    })
 
 
-
-@app.route('/api/signup', methods=['POST', 'GET'])
+@app.route('/api/signup', methods=['POST'])
+@api_errors
 def signup_route():
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        name = data.get('name')
-        phone_number = data.get('phoneNo')
-        address = data.get('address')
-        if not validate_email(email):  
-            raise Exception("Valid email required")
-        if not validate_phone_number(phone_number): 
-            raise Exception("Valid phone number required")
-        
-        signup(email, password)
-        add_user_info(email, name, phone_number, address)
-        return jsonify({"message":"Success"})
-    except Exception as e:
-        return jsonify({"Error": str(e)})
-
-@app.route('/api/category/<int:category_id>', methods=['GET'])
-def products_by_category(category_id):
-    try:
-        products = get_products_by_category(category_id)
-        return jsonify(products)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    data = json_body()
+    name = require_str(data, 'name', "Name")
+    email = require_str(data, 'email', "Email")
+    password = data.get('password')
+    phone_number = data.get('phoneNo')
+    address = data.get('address') or ""
+    if not validate_email(email):
+        raise BadRequest("Valid email required")
+    if not validate_phone_number(phone_number):
+        raise BadRequest("Valid phone number required")
+    if not isinstance(password, str) or not password:
+        raise BadRequest("Password is required")
+    if not isinstance(address, str):
+        raise BadRequest("Address must be text")
+    register_user(email, password, name, phone_number.strip(), address.strip())
+    return jsonify({"message": "Success"}), 201
 
 
-@app.route('/api/search', methods=['POST', 'GET'])
+@app.route('/api/apply_manager', methods=['POST'])
+@jwt_required()
+@api_errors
+def apply_manager():
+    add_manager_apply(get_jwt_identity())
+    cache.clear()
+    return jsonify({"success": "Applied for manager status."})
+
+
+# --- search -----------------------------------------------------------------
+
+@app.route('/api/search', methods=['POST'])
+@api_errors
 def search():
-    try:
+    data = json_body()
+    search_query = data.get('search_query') or ""
+    if not isinstance(search_query, str):
+        raise BadRequest("search_query must be text")
+    search_query = search_query.strip().lower()
 
-        search_query = request.json.get('search_query')
-        print(search_query)
-        min_price = request.json.get('min_price', 0)
-        max_price = request.json.get('max_price')
-        if max_price == 0: max_price = float('inf')
-        min_manufacture_date = request.json.get('min_manufacture_date', '')
-        max_manufacture_date = request.json.get('max_manufacture_date', '')
-        min_expiry_date = request.json.get('min_expiry_date', '')
-        max_expiry_date = request.json.get('max_expiry_date', '')
-        exclude_out_of_stock = request.json.get('exclude_out_of_stock')
-        
-        product_results = search_products_in_db(search_query.lower(), min_price, max_price,
-                                                min_manufacture_date, max_manufacture_date,
-                                                min_expiry_date, max_expiry_date, exclude_out_of_stock)
-        print(len(product_results))
-        category_results = search_categories_in_db(search_query.lower())
-        
-        response_data = { }
+    min_price = data.get('min_price')
+    min_price = 0 if min_price in (None, "") else number(min_price, "Minimum price", positive=False)
+    max_price = data.get('max_price')
+    # 0 / empty means "no upper limit"
+    max_price = None if max_price in (None, "", 0) else number(max_price, "Maximum price", positive=False)
+    if max_price is not None and max_price < min_price:
+        raise BadRequest("Maximum price must not be below minimum price")
 
-        if product_results:
-            response_data["products"] = product_results
-        elif category_results:
+    filters = dict(
+        min_price=min_price,
+        max_price=max_price,
+        min_manufacture_date=optional_date(data.get('min_manufacture_date'), "Minimum manufacture date"),
+        max_manufacture_date=optional_date(data.get('max_manufacture_date'), "Maximum manufacture date"),
+        min_expiry_date=optional_date(data.get('min_expiry_date'), "Minimum expiry date"),
+        max_expiry_date=optional_date(data.get('max_expiry_date'), "Maximum expiry date"),
+        exclude_out_of_stock=bool(data.get('exclude_out_of_stock')),
+    )
+
+    response_data = {}
+    product_results = search_products_in_db(search_query, **filters)
+    if product_results:
+        response_data["products"] = product_results
+    else:
+        category_results = search_categories_in_db(search_query)
+        if category_results:
             response_data["category_results"] = category_results
-            products_in_category = get_products_by_category_search(category_results, min_price, max_price,
-                                                min_manufacture_date, max_manufacture_date,
-                                                min_expiry_date, max_expiry_date)
-            print("Products in category", products_in_category)
+            products_in_category = get_products_by_category_search(category_results, **filters)
             if products_in_category:
                 response_data["products_in_category"] = products_in_category
             else:
                 response_data["no_results"] = True
         else:
             response_data["no_results"] = True
-        
-        print(response_data)
-        return jsonify(response_data)
-    except Exception as e:
-        return jsonify({"error": str(e)})
-    
-@app.route('/api/apply_manager', methods=['GET', 'POST'])
-@jwt_required()
-def apply_manager():
-    try:
-        email = get_jwt_identity()
-        print(email)
-        add_manager_apply(email)
-        return jsonify({"success": "Applied for manager status."})
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify(response_data)

@@ -1,16 +1,26 @@
 import hashlib
 import hmac
-from werkzeug.security import generate_password_hash, check_password_hash
-from applications.database import *
 import re
+
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from applications.database import get_db
+from applications.http_errors import BadRequest, Conflict, Unauthorized
+
+INVALID_CREDENTIALS = "Invalid email or password. Please try again."
+
 
 def validate_email(email):
     email_pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
-    return re.match(email_pattern, email) is not None
+    return isinstance(email, str) and re.match(email_pattern, email) is not None
+
 
 def validate_phone_number(phone_number):
+    if not isinstance(phone_number, str):
+        return False
     numeric_phone = re.sub(r'\D', '', phone_number)
     return len(numeric_phone) == 10
+
 
 def _password_matches(stored, password):
     """Check a password against a stored hash.
@@ -24,76 +34,51 @@ def _password_matches(stored, password):
     return hmac.compare_digest(stored, legacy)
 
 
-def get_user(email):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        query = "SELECT * FROM user_profiles WHERE email=?"
-        cursor.execute(query, (email,))
-        user = cursor.fetchone()
-        cursor.close()
-        return user
-    except Exception as e:
-        cursor.close()
-        raise e
-
 def login(email, password):
-    db = get_db()
-    cursor = db.cursor()
-    if not validate_email(email): raise Exception("Invalid email")
-    
+    """Raise Unauthorized unless the shopper's credentials are valid.
+
+    The same message is used for unknown e-mails and wrong passwords so the
+    endpoint can't be used to discover which accounts exist.
+    """
+    cursor = get_db().cursor()
     try:
-        query = "SELECT * FROM users WHERE email=?"
-        cursor.execute(query, (email,))
+        cursor.execute("SELECT password FROM users WHERE email=?", (email,))
         user = cursor.fetchone()
-
-        if user:
-            if _password_matches(user[1], password):
-                cursor.close()
-                return
-            else:
-                raise Exception("Invalid password. Please try again.")        
-        else:
-            raise Exception("Email does not exist. Please try again.")
-    except Exception as e:
+    finally:
         cursor.close()
-        raise e
+    if not user or not _password_matches(user[0], password):
+        raise Unauthorized(INVALID_CREDENTIALS)
 
 
-
-def signup(email, password):
+def register_user(email, password, name, phone, address):
+    """Create the login and the profile together, or neither."""
+    if len(password) < 6:
+        raise BadRequest("Password must be at least 6 characters")
     db = get_db()
     cursor = db.cursor()
     try:
-        if not password or len(password) < 6:
-            raise Exception("Password must be at least 6 characters")
-        hashed_password = generate_password_hash(password)
-        query_1 = "SELECT * FROM users WHERE email=?"
-        cursor.execute(query_1, (email,))
-        existing_user = cursor.fetchone()
-        if existing_user != None:
-            raise Exception("Email already exists")
-        query = "INSERT INTO users (email, password) VALUES (?, ?)"
-        cursor.execute(query, (email, hashed_password))
+        cursor.execute("SELECT 1 FROM users WHERE email=?", (email,))
+        if cursor.fetchone() is not None:
+            raise Conflict("Email already exists")
+        cursor.execute("INSERT INTO users (email, password) VALUES (?, ?)",
+                       (email, generate_password_hash(password)))
+        cursor.execute("INSERT INTO user_profiles (email, name, address, phone) VALUES (?, ?, ?, ?)",
+                       (email, name, address, phone))
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e
 
 
 def manager_login(email, password):
-    db = get_db()
-    cursor = db.cursor()
-    
-    query = "SELECT password FROM managers WHERE email=?"
-    cursor.execute(query, (email,))
-    manager = cursor.fetchone()
-
-    cursor.close()
-
-    if manager and password and _password_matches(manager[0], password):
-        return True
-    else:
-        raise Exception("Invalid email or password. Please try again.")
+    """Admin login (the `managers` table holds the admin account)."""
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT password FROM managers WHERE email=?", (email,))
+        manager = cursor.fetchone()
+    finally:
+        cursor.close()
+    if not manager or not _password_matches(manager[0], password):
+        raise Unauthorized(INVALID_CREDENTIALS)

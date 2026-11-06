@@ -1,218 +1,165 @@
-from applications.database import *
+from datetime import date
+
+from applications.database import get_db
+from applications.http_errors import BadRequest, Conflict, NotFound
+
+
+def _stock(cursor, product_id):
+    cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (product_id,))
+    row = cursor.fetchone()
+    return row[0] if row and row[0] is not None else 0
+
+
+def product_exists(product_id):
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT 1 FROM products WHERE productID = ?", (product_id,))
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def _cart_quantity(cursor, email, product_id):
+    cursor.execute("SELECT quantity FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
 
 def insert_cart_item(email, product_id, quantity):
     db = get_db()
     cursor = db.cursor()
-
-    # Check if the product is available in the inventory with enough quantity
-    cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (product_id,))
-    available_quantity = cursor.fetchone()
-    quantity = int(quantity)
-
-    if available_quantity is None or available_quantity[0] < quantity:
-        cursor.close()
-        in_stock = available_quantity[0] if available_quantity else 0
-        raise Exception(f"Insufficient stock for this product. Available in stock: {in_stock}")
-    
     try:
-        # Check if the product is already in the cart for the user
-        cursor.execute("SELECT quantity FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
-        existing_quantity = cursor.fetchone()
-        
-        if existing_quantity:
-            # If the product is already in the cart, update the quantity
-            new_quantity = existing_quantity[0] + quantity
-            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?", 
+        if not product_exists(product_id):
+            raise NotFound("Product not found")
+        existing = _cart_quantity(cursor, email, product_id)
+        new_quantity = (existing or 0) + quantity
+        in_stock = _stock(cursor, product_id)
+        if new_quantity > in_stock:
+            raise Conflict(
+                f"Insufficient stock for this product. Available in stock: {in_stock}"
+                + (f" (you already have {existing} in your cart)" if existing else "")
+            )
+        if existing is not None:
+            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?",
                            (new_quantity, email, product_id))
         else:
-            # If the product is not in the cart, insert a new row
             cursor.execute("INSERT INTO cart (email, product_id, quantity) VALUES (?, ?, ?)",
-                            (email, product_id, quantity))
-        
+                           (email, product_id, quantity))
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e
 
 
 def fetch_cart_items_by_email(email):
-    db = get_db()
-    cursor = db.cursor()
-    
+    cursor = get_db().cursor()
     try:
-    
-        # Query cart items based on the user's email
         cursor.execute('''SELECT products.name, products.price, cart.quantity, products.productID
                         FROM cart
                         INNER JOIN products ON cart.product_id = products.productID
                         WHERE cart.email = ?''', (email,))
-        
-        cart_items = cursor.fetchall()
+        return [
+            {"name": name, "price": price, "quantity": quantity, "productID": product_id}
+            for name, price, quantity, product_id in cursor.fetchall()
+        ]
+    finally:
         cursor.close()
-        
-        cart_items_list = []
-        for item in cart_items:
-            cart_item_dict = {
-                "name": item[0],
-                "price": item[1],
-                "quantity": item[2],
-                "productID": item[3]
-            }
-            cart_items_list.append(cart_item_dict)
 
-        return cart_items_list
-    
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
 
-def fetch_cart_items_by_email_for_checkout(email):
-    db = get_db()
-    cursor = db.cursor()
-
-    try:
-    
-        # Query cart items based on the user's email
-        cursor.execute('''SELECT products.name, products.price, cart.quantity, products.productID
-                        FROM cart
-                        INNER JOIN products ON cart.product_id = products.productID
-                        WHERE cart.email = ?''', (email,))
-        
-        cart_items = cursor.fetchall()
-        cursor.close()
-        return cart_items
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-
-def apply_coupon(email, coupon_code):
-    db = get_db()
-    cursor = db.cursor()
-
-    try:
-        cursor.execute("SELECT discount_percentage FROM coupons WHERE coupon_code = ?", (coupon_code,))
-        coupon_data = cursor.fetchone()
-        
-        if coupon_data is None:
-            # Coupon code not found in the database
-            raise Exception('No such coupon code available.')
-        
-        # Check if the coupon code has already been used by the user
-        cursor.execute("SELECT * FROM used_coupons WHERE user_email = ? AND coupon_code = ?", (email, coupon_code))
-        used_coupon_data = cursor.fetchone()
-        
-        if used_coupon_data is not None:
-            # Coupon code has already been used by the user
-            raise Exception("You've already used this coupon code.")
-        
-        # Insert the coupon code into the used_coupons table
-        cursor.execute("INSERT INTO used_coupons (user_email, coupon_code) VALUES (?, ?)", (email, coupon_code))
-
-        db.commit()
-        db.close()
-        return int(coupon_data[0])
-    except Exception as e:
-        db.rollback()
-        db.close()
-        raise e
-    
-def empty_cart(email):
-    
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # Delete all cart items associated with the user's email
-        cursor.execute("DELETE FROM cart WHERE email = ?", (email,))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
 def delete_cart_item(email, product_id):
     db = get_db()
     cursor = db.cursor()
     try:
-        # Delete the cart item associated with the user's email and product ID
         cursor.execute("DELETE FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
+        if cursor.rowcount == 0:
+            raise NotFound("This product is not in your cart")
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e
-    
+
+
 def update_cart_item(email, product_id, quantity):
+    """Set the cart quantity for a product; a quantity of 0 removes it."""
     db = get_db()
     cursor = db.cursor()
     try:
-        # Update the cart item associated with the user's email and product ID
+        if _cart_quantity(cursor, email, product_id) is None:
+            raise NotFound("This product is not in your cart")
         if quantity == 0:
             cursor.execute("DELETE FROM cart WHERE email = ? AND product_id = ?", (email, product_id))
         else:
-            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?", 
-                            (quantity, email, product_id))
+            in_stock = _stock(cursor, product_id)
+            if quantity > in_stock:
+                raise Conflict(f"Insufficient stock for this product. Available in stock: {in_stock}")
+            cursor.execute("UPDATE cart SET quantity = ? WHERE email = ? AND product_id = ?",
+                           (quantity, email, product_id))
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e
 
 
-def record_order(email, order_date, cart_items, totalPrice):
+def checkout_cart(email):
+    """Turn the user's cart into an order in a single transaction.
+
+    Checks and decrements inventory, records the order (with a total computed
+    from current product prices, never from the client) and its items, and
+    empties the cart. Any failure rolls back every step.
+    Returns ``(order_id, items, total)``.
+    """
     db = get_db()
     cursor = db.cursor()
     try:
-        # Insert the order into the orders table
-        cursor.execute("INSERT INTO orders (email, order_date, total_price) VALUES (?, ?, ?)", (email, order_date, totalPrice))
-        order_id = cursor.lastrowid
-        
-        print(cart_items)
-        # Insert the order items into the order_items table
-        for cart_item in cart_items:
-            cursor.execute("INSERT INTO order_items (orderID, product_name, quantity) VALUES (?, ?, ?)", 
-                            (order_id, cart_item[0], cart_item[2]))
-        print(2)
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
-
-def update_inventory(email):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        # Update the inventory based on this user's cart items
+        if db.in_transaction:
+            db.commit()
+        # Take the write lock up front so concurrent checkouts can't oversell.
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
-            "SELECT c.product_id, c.quantity, p.name FROM cart c JOIN products p ON c.product_id = p.productID "
-            "WHERE c.email = ?",
+            '''SELECT p.productID, p.name, p.price, c.quantity, COALESCE(i.quantity, 0)
+               FROM cart c
+               JOIN products p ON c.product_id = p.productID
+               LEFT JOIN inventory i ON i.productID = p.productID
+               WHERE c.email = ?''',
             (email,),
         )
-        cart_items = cursor.fetchall()
-        
-        for cart_item in cart_items:
-            cursor.execute("SELECT quantity FROM inventory WHERE productID = ?", (cart_item[0],))
-            inventory_quantity = cursor.fetchone()[0]
-            
-            if inventory_quantity < cart_item[1]:
-                raise Exception(f"Not enough inventory for product '{cart_item[2]}'. Available: {inventory_quantity}, Requested: {cart_item[1]}")
+        rows = cursor.fetchall()
+        if not rows:
+            raise BadRequest("Your cart is empty")
 
-            cursor.execute("UPDATE inventory SET quantity = quantity - ? WHERE productID = ?", 
-                            (cart_item[1], cart_item[0]))
-        
+        items = []
+        total = 0.0
+        for product_id, name, price, quantity, in_stock in rows:
+            if quantity > in_stock:
+                raise Conflict(f"Not enough stock for '{name}'. Available: {in_stock}, requested: {quantity}")
+            cursor.execute(
+                "UPDATE inventory SET quantity = quantity - ? WHERE productID = ? AND quantity >= ?",
+                (quantity, product_id, quantity),
+            )
+            if cursor.rowcount != 1:
+                raise Conflict(f"Not enough stock for '{name}'")
+            total += price * quantity
+            items.append({"productID": product_id, "name": name, "price": price, "quantity": quantity})
+
+        total = round(total, 2)
+        cursor.execute("INSERT INTO orders (email, order_date, total_price) VALUES (?, ?, ?)",
+                       (email, date.today().isoformat(), total))
+        order_id = cursor.lastrowid
+        cursor.executemany(
+            "INSERT INTO order_items (orderID, product_name, quantity) VALUES (?, ?, ?)",
+            [(order_id, item["name"], item["quantity"]) for item in items],
+        )
+        cursor.execute("DELETE FROM cart WHERE email = ?", (email,))
         db.commit()
-        cursor.close()
-
-    except Exception as e:
+        return order_id, items, total
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e

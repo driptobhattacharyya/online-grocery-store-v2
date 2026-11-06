@@ -40,7 +40,7 @@
 </template>
 
 <script>
-import axios from 'axios';
+import axios from "axios";
 
 export default {
   props: {
@@ -49,43 +49,28 @@ export default {
   },
   data() {
     return {
-      count: 0
+      count: 0,
     };
   },
   methods: {
-    addToCart() {
-      let product_id = this.product[0];
-      let count = this.count;
-      if(count <= 0){
-        alert("Please enter a positive value")
-      } else {
-        const token = sessionStorage.getItem("accessToken");
-        console.log(token);
-        axios
-          .post("/api/add_to_cart", {
-            "product_id": product_id,
-            "quantity": count,
-          },{
-            mode: 'no-cors',
-            headers: {
-              'Authorization': "Bearer "+token
-            }
-          })
-          .then((response) => {
-            console.log(response.data);
-            if (response.data.success){
-              alert(response.data.success)
-            } else {
-              alert(response.data.error)
-            }
-          })
-          .catch((error) => {
-            // Handle login error
-            console.error(error.data.error);
-          });
+    async addToCart() {
+      const quantity = Number(this.count);
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        alert("Please enter a positive whole number");
+        return;
       }
-    }
-  }
+      try {
+        const response = await axios.post(
+          "/api/add_to_cart",
+          { product_id: this.product[0], quantity },
+          { headers: { Authorization: "Bearer " + sessionStorage.getItem("accessToken") } }
+        );
+        alert(response.data.success);
+      } catch (error) {
+        alert(error?.response?.data?.error || "Could not add the product to your cart.");
+      }
+    },
+  },
 };
 </script>
 
