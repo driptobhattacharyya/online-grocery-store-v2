@@ -6,7 +6,7 @@ import textwrap
 import pytest
 from flask_jwt_extended import create_access_token
 
-from helpers import ADMIN, DEMO_USER, assert_error, bearer
+from helpers import ADMIN, DEMO_USER, assert_error, bearer, mint_token
 
 VALID_SIGNUP = {"name": "Alice", "email": "alice@example.com", "password": "secret123",
                 "phoneNo": "123-456-7890", "address": " 5 Elm St "}
@@ -177,7 +177,7 @@ def test_role_is_checked_against_database_not_token(app, client, execute, manage
     assert_error(client.get("/api/manager/dashboard", headers=bearer(manager_token)), 403)
     # A shopper token with a forged "manager" role claim gets nothing either.
     with app.app_context():
-        token = create_access_token(identity=DEMO_USER[0], additional_claims={"role": "manager"})
+        token = mint_token(DEMO_USER[0], role="manager")
     assert_error(client.get("/api/manager/dashboard", headers=bearer(token)), 403)
 
 

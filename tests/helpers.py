@@ -14,6 +14,18 @@ def bearer(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+def mint_token(identity, role="user", **kwargs):
+    """An access token like the login endpoints issue, including the "dbid"
+    claim of the current database. Call inside ``app.app_context()``."""
+    from flask_jwt_extended import create_access_token
+
+    from applications.database import get_db_instance_id
+
+    claims = {"role": role, "dbid": get_db_instance_id()}
+    claims.update(kwargs.pop("additional_claims", {}))
+    return create_access_token(identity=identity, additional_claims=claims, **kwargs)
+
+
 def assert_error(response, status):
     """Every API error is JSON ``{"error": "<message>"}`` with the right status."""
     assert response.status_code == status, (response.status_code, response.get_data(as_text=True))
