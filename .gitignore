@@ -10,3 +10,7 @@ node_modules/
 frontend/dist/
 .DS_Store
 .claude/worktrees/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/

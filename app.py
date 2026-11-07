@@ -7,7 +7,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from werkzeug.exceptions import HTTPException, InternalServerError
+from werkzeug.exceptions import HTTPException, InternalServerError, NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from applications.caching import cache
@@ -119,10 +119,25 @@ def _is_api_request():
     return request.path == "/api" or request.path.startswith("/api/")
 
 
+def _only_spa_matches(exc):
+    """True when a 405 comes only from the GET-only SPA catch-all, i.e. no API
+    route exists at this path (e.g. POST /api/nope): that is a 404."""
+    # A routing 405 lists the allowed methods; spa()'s own abort(405) doesn't.
+    if not exc.valid_methods or not set(exc.valid_methods) <= {"GET", "HEAD", "OPTIONS"}:
+        return False
+    try:
+        endpoint, _ = app.url_map.bind("").match(request.path, method="GET")
+    except HTTPException:
+        return False
+    return endpoint == "spa"
+
+
 @app.errorhandler(HTTPException)
 def _http_error(exc):
     if not _is_api_request():
         return exc
+    if exc.code == 405 and _only_spa_matches(exc):
+        exc = NotFound()
     response = exc.get_response()
     if exc.code == 429:
         message = "Too many attempts. Please wait a minute and try again."
