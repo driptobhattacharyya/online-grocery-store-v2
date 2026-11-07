@@ -8,6 +8,7 @@ from functools import wraps
 from numbers import Number
 
 from flask import current_app, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 
 class ApiError(Exception):
@@ -53,6 +54,9 @@ def api_errors(view):
             return view(*args, **kwargs)
         except ApiError as e:
             return error_response(e.message, e.status)
+        except HTTPException:
+            # e.g. 413 from reading an oversized body: app.py renders it as JSON
+            raise
         except Exception:
             current_app.logger.exception("Unhandled error in %s %s", request.method, request.path)
             return error_response("Something went wrong. Please try again later.", 500)

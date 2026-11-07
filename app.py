@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, abort, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
@@ -40,10 +40,11 @@ except Exception as exc:
 
 # Behind a reverse proxy (Render), trust its X-Forwarded-For/-Proto headers so
 # request.remote_addr is the real client (used by the rate limiter) and
-# request.scheme is https.
+# request.scheme is https. X-Forwarded-Host/-Port are not trusted: nothing
+# builds absolute URLs, and the platform's proxy already sets Host.
 if app.config["TRUSTED_PROXY_COUNT"] > 0:
     n = app.config["TRUSTED_PROXY_COUNT"]
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n, x_port=n)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n)
 
 jwt = JWTManager(app)
 cache.init_app(app)
@@ -72,6 +73,33 @@ def _invalid_token(reason):
 @jwt.unauthorized_loader
 def _missing_token(reason):
     return jsonify({"error": "Missing authorization token"}), 401
+
+
+# Tokens outlive the database on an ephemeral disk (redeploy, restart, idle
+# spin-down) because the signing key persists. Each token carries the id of
+# the database it was issued against ("dbid"); reject it when that database is
+# gone or its account no longer exists (e.g. a deleted user whose e-mail was
+# re-registered by someone else).
+@jwt.token_verification_loader
+def _token_matches_database(jwt_header, jwt_payload):
+    cache_key = (jwt_payload.get("jti"), jwt_payload.get("dbid"))
+    checked = g.get("_token_checked")
+    if checked is not None and checked[0] == cache_key:
+        return checked[1]  # per_user_cache_key verifies the same token again
+    table = "managers" if jwt_payload.get("role") == "admin" else "users"
+    row = get_db().execute(
+        f"SELECT (SELECT value FROM meta WHERE key = 'db_instance_id'), "
+        f"EXISTS (SELECT 1 FROM {table} WHERE email = ?)",
+        (jwt_payload.get("sub"),),
+    ).fetchone()
+    ok = bool(jwt_payload.get("dbid")) and row[0] == jwt_payload.get("dbid") and bool(row[1])
+    g._token_checked = (cache_key, ok)
+    return ok
+
+
+@jwt.token_verification_failed_loader
+def _stale_token(jwt_header, jwt_payload):
+    return jsonify({"error": "Session is no longer valid, please log in again"}), 401
 
 
 # Background jobs (daily reminder + monthly report e-mails). Only active when

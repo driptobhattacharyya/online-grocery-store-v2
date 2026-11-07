@@ -50,8 +50,9 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=float(_env("JWT_ACCESS_TOKEN_EXPIRES_HOURS", "12")))
     JWT_ERROR_MESSAGE_KEY = "error"
 
-    # Admin account (seeded into the `managers` table on every start)
-    ADMIN_USERNAME = _env("ADMIN_USERNAME", "admin")
+    # Admin account (seeded into the `managers` table on every start).
+    # Lower-cased like every login e-mail/username (see normalize_email).
+    ADMIN_USERNAME = _env("ADMIN_USERNAME", "admin").lower()
     ADMIN_PASSWORD = _env("ADMIN_PASSWORD") or DEV_ADMIN_PASSWORD
 
     # Caching: Redis when REDIS_URL is set, in-process memory otherwise.
@@ -78,6 +79,10 @@ class Config:
     CONTENT_SECURITY_POLICY = _env("CONTENT_SECURITY_POLICY")
 
     LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
+
+    # Largest accepted request body; bigger ones get a 413. The API only takes
+    # small JSON bodies.
+    MAX_CONTENT_LENGTH = _env_int("MAX_CONTENT_LENGTH", 1024 * 1024)
 
     # Comma-separated list of origins allowed to call the API cross-origin.
     # Not needed when the frontend is served by Flask itself (the default).

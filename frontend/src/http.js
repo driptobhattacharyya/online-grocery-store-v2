@@ -14,26 +14,19 @@ function isAuthEndpoint(url = "") {
   return AUTH_ENDPOINTS.includes(path);
 }
 
-// flask-jwt-extended answers 401 for a missing/expired token but 422 for a
-// malformed or badly signed one (e.g. after JWT_SECRET_KEY rotates), always
-// with a `{ msg }` body. App endpoints never use `msg`, so a 422 with that
-// shape on a request that carried a token means the session is dead too.
+// The API answers every rejected token (missing, expired, malformed, badly
+// signed, or issued against a database that has since been reset) with
+// 401 `{ error }` (see the JWT loaders in app.py).
 function isSessionRejected(error) {
-  const res = error.response;
-  if (!res) return false;
-  if (res.status === 401) return true;
-  const headers = (error.config && error.config.headers) || {};
-  const sentToken = Boolean(
-    typeof headers.get === "function"
-      ? headers.get("Authorization")
-      : headers.Authorization || headers.authorization
-  );
-  return (
-    res.status === 422 &&
-    sentToken &&
-    res.data &&
-    typeof res.data.msg === "string"
-  );
+  return Boolean(error.response && error.response.status === 401);
+}
+
+// The login page for the session that just died: admins log in at
+// /admin/login, shoppers and managers at /login. Only without a stored role
+// (nothing to go on) is the current path used to guess.
+function loginPathAfterExpiry(role, currentPath) {
+  if (role) return loginPathFor(role === "admin" ? ["admin"] : null);
+  return loginPathFor(currentPath.startsWith("/admin") ? ["admin"] : null);
 }
 
 let installed = false;
@@ -52,10 +45,8 @@ export function installHttpInterceptors(instance = axios) {
       const url = error.config && error.config.url;
       if (isSessionRejected(error) && !isAuthEndpoint(url)) {
         const current = router.currentRoute.value;
-        const adminArea =
-          getRole() === "admin" || current.path.startsWith("/admin");
+        const target = loginPathAfterExpiry(getRole(), current.path);
         logout();
-        const target = loginPathFor(adminArea ? ["admin"] : null);
         if (current.path !== target) {
           router.replace({
             path: target,

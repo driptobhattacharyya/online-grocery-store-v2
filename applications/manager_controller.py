@@ -14,12 +14,12 @@ from applications.auth import is_admin, is_manager_or_admin, per_user_cache_key
 from applications.caching import cache
 from applications.cart_functions import product_exists
 from applications.categories_functions import get_category_id_by_name
-from applications.database import get_db
+from applications.database import get_db, get_db_instance_id
 from applications.http_errors import (
     BadRequest, Forbidden, NotFound, api_errors, iso_date, json_body, number, only_ok,
     positive_int, require_str,
 )
-from applications.login_manager import manager_login
+from applications.login_manager import manager_login, normalize_email
 from applications.manager_functions import (
     add_category_to_db, add_product_to_category_in_db, get_categories_with_products_from_db,
     remove_category_from_db, remove_product_from_db, update_product_in_db,
@@ -71,12 +71,14 @@ def _product_fields(data):
 @api_errors
 def manager_login_route():  # admin login
     data = json_body()
-    email = require_str(data, 'email', "Username")
+    email = normalize_email(require_str(data, 'email', "Username"))
     password = data.get('password')
     if not isinstance(password, str) or not password:
         raise BadRequest("Password is required")
     manager_login(email, password)
-    access_token = create_access_token(identity=email, additional_claims={"role": "admin"})
+    access_token = create_access_token(
+        identity=email, additional_claims={"role": "admin", "dbid": get_db_instance_id()}
+    )
     return jsonify({'access_token': access_token})
 
 
@@ -152,6 +154,19 @@ def add_category():
     return jsonify({"success": "Category added successfully"}), 201
 
 
+# Spreadsheet apps treat a cell starting with one of these as a formula.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Neutralise CSV/formula injection: text cells that a spreadsheet would
+    evaluate (e.g. a product named ``=HYPERLINK(...)``) get a leading ``'``.
+    Numbers are left alone so negative amounts stay numeric."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 @app.route('/api/manager/prepare_report', methods=['GET'])
 @jwt_required()
 @api_errors
@@ -172,7 +187,7 @@ def prepare_report():
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(['Product name', 'Quantity sold', 'Total amount'])
-    writer.writerows(rows)
+    writer.writerows([_csv_safe(cell) for cell in row] for row in rows)
     response = Response(buffer.getvalue().encode('utf-8'), content_type='text/csv')
     response.headers['Content-Disposition'] = 'attachment; filename=order_report.csv'
     return response

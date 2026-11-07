@@ -25,10 +25,19 @@ def _cart_quantity(cursor, email, product_id):
     return row[0] if row else None
 
 
+def _begin_immediate(db, cursor):
+    """Start a write transaction now, so a read-check-write sequence can't
+    interleave with another request's (which would lose an update)."""
+    if db.in_transaction:
+        db.commit()
+    cursor.execute("BEGIN IMMEDIATE")
+
+
 def insert_cart_item(email, product_id, quantity):
     db = get_db()
     cursor = db.cursor()
     try:
+        _begin_immediate(db, cursor)
         if not product_exists(product_id):
             raise NotFound("Product not found")
         existing = _cart_quantity(cursor, email, product_id)
@@ -88,6 +97,7 @@ def update_cart_item(email, product_id, quantity):
     db = get_db()
     cursor = db.cursor()
     try:
+        _begin_immediate(db, cursor)
         if _cart_quantity(cursor, email, product_id) is None:
             raise NotFound("This product is not in your cart")
         if quantity == 0:
@@ -117,10 +127,8 @@ def checkout_cart(email):
     db = get_db()
     cursor = db.cursor()
     try:
-        if db.in_transaction:
-            db.commit()
         # Take the write lock up front so concurrent checkouts can't oversell.
-        cursor.execute("BEGIN IMMEDIATE")
+        _begin_immediate(db, cursor)
         cursor.execute(
             '''SELECT p.productID, p.name, p.price, c.quantity, COALESCE(i.quantity, 0)
                FROM cart c

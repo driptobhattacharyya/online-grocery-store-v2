@@ -17,7 +17,10 @@ from applications.http_errors import (
     BadRequest, NotFound, api_errors, json_body, number, only_ok, optional_date,
     positive_int, require_str,
 )
-from applications.login_manager import login, register_user, validate_email, validate_phone_number
+from applications.database import get_db_instance_id
+from applications.login_manager import (
+    login, normalize_email, register_user, validate_email, validate_phone_number,
+)
 from applications.search_functions import (
     get_products_by_category_search, search_categories_in_db, search_products_in_db,
 )
@@ -144,7 +147,7 @@ def user_dashboard():
 @api_errors
 def login_route():
     data = json_body()
-    email = require_str(data, 'email', "Email")
+    email = normalize_email(require_str(data, 'email', "Email"))
     password = data.get('password')
     if not isinstance(password, str) or not password:
         raise BadRequest("Password is required")
@@ -152,7 +155,8 @@ def login_route():
     user = fetch_user_info(email)
     is_manager = manager_check(email)
     access_token = create_access_token(
-        identity=email, additional_claims={"role": "manager" if is_manager else "user"}
+        identity=email,
+        additional_claims={"role": "manager" if is_manager else "user", "dbid": get_db_instance_id()},
     )
     return jsonify({
         'access_token': access_token,
@@ -166,7 +170,7 @@ def login_route():
 def signup_route():
     data = json_body()
     name = require_str(data, 'name', "Name")
-    email = require_str(data, 'email', "Email")
+    email = normalize_email(require_str(data, 'email', "Email"))
     password = data.get('password')
     phone_number = data.get('phoneNo')
     address = data.get('address') or ""

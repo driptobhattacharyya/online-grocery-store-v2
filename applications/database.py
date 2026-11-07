@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import sqlite3
 import time
 from datetime import date, timedelta
@@ -73,7 +74,15 @@ CREATE TABLE IF NOT EXISTS order_items (
     product_name TEXT NOT NULL,
     quantity     INTEGER
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+# Created after _merge_duplicate_cart_rows, which older databases may need.
+CART_UNIQUE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS cart_email_product ON cart (email, product_id)"
+
 
 # (category, [(name, price, unit, shelf_life_days, stock), ...])
 DEMO_CATALOG = [
@@ -150,6 +159,31 @@ def close_db(exception=None):
         db.close()
 
 
+def get_db_instance_id(db=None):
+    """Random id of this database file, generated when it was created.
+
+    Every auth token carries it, so tokens issued against a database that has
+    since been wiped (redeploy, restart on an ephemeral disk) are rejected.
+    """
+    row = (db or get_db()).execute("SELECT value FROM meta WHERE key = 'db_instance_id'").fetchone()
+    return row[0] if row else None
+
+
+def _merge_duplicate_cart_rows(cur):
+    """Collapse duplicate (email, product_id) cart rows into one, summing the
+    quantities, so the unique index can be created on older databases."""
+    if cur.execute("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'cart_email_product'").fetchone():
+        return
+    cur.execute(
+        """UPDATE cart SET quantity = (SELECT SUM(c2.quantity) FROM cart c2
+                                        WHERE c2.email = cart.email AND c2.product_id = cart.product_id)
+           WHERE cartID IN (SELECT MIN(cartID) FROM cart GROUP BY email, product_id HAVING COUNT(*) > 1)"""
+    )
+    cur.execute("DELETE FROM cart WHERE cartID NOT IN (SELECT MIN(cartID) FROM cart GROUP BY email, product_id)")
+    if cur.rowcount:
+        log.info("Merged %d duplicate cart rows", cur.rowcount)
+
+
 def _schema_statements():
     return [stmt.strip() for stmt in SCHEMA.split(";") if stmt.strip()]
 
@@ -197,9 +231,19 @@ def init_db(app):
             for statement in _schema_statements():
                 conn.execute(statement)
             cur = conn.cursor()
+            _merge_duplicate_cart_rows(cur)
+            cur.execute(CART_UNIQUE_INDEX)
+            # Inside the same IMMEDIATE transaction, so concurrent starters agree
+            # on one id; also backfills databases created before the meta table.
+            cur.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('db_instance_id', ?)",
+                        (secrets.token_hex(16),))
+            # The admin account is whatever ADMIN_USERNAME says now; drop any
+            # account left over from an earlier ADMIN_USERNAME.
+            admin = app.config["ADMIN_USERNAME"]
+            cur.execute("DELETE FROM managers WHERE email <> ?", (admin,))
             cur.execute(
                 "INSERT OR REPLACE INTO managers (email, password) VALUES (?, ?)",
-                (app.config["ADMIN_USERNAME"], generate_password_hash(app.config["ADMIN_PASSWORD"])),
+                (admin, generate_password_hash(app.config["ADMIN_PASSWORD"])),
             )
             if fresh:
                 _seed(cur)

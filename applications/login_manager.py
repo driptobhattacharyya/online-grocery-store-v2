@@ -9,6 +9,16 @@ from applications.http_errors import BadRequest, Conflict, Unauthorized
 
 INVALID_CREDENTIALS = "Invalid email or password. Please try again."
 
+# Checked against when the account doesn't exist, so a login for an unknown
+# e-mail costs the same hash computation as one with a wrong password and
+# response times don't reveal which accounts exist.
+_DUMMY_HASH = generate_password_hash("timing-equaliser-not-a-real-password")
+
+
+def normalize_email(email):
+    """Logins and sign-ups are case-insensitive: store and look up trimmed, lower-case e-mails."""
+    return email.strip().lower() if isinstance(email, str) else email
+
 
 def validate_email(email):
     email_pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
@@ -46,7 +56,10 @@ def login(email, password):
         user = cursor.fetchone()
     finally:
         cursor.close()
-    if not user or not _password_matches(user[0], password):
+    if not user:
+        check_password_hash(_DUMMY_HASH, password)
+        raise Unauthorized(INVALID_CREDENTIALS)
+    if not _password_matches(user[0], password):
         raise Unauthorized(INVALID_CREDENTIALS)
 
 
@@ -80,5 +93,8 @@ def manager_login(email, password):
         manager = cursor.fetchone()
     finally:
         cursor.close()
-    if not manager or not _password_matches(manager[0], password):
+    if not manager:
+        check_password_hash(_DUMMY_HASH, password)
+        raise Unauthorized(INVALID_CREDENTIALS)
+    if not _password_matches(manager[0], password):
         raise Unauthorized(INVALID_CREDENTIALS)
