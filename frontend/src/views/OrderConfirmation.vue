@@ -4,15 +4,14 @@
       <div class="col-md-6 order-card">
         <h2 class="order-title">Order Confirmation</h2>
         <ul class="item-list">
-          <li class="item" v-for="item in cartItems" :key="item.id">
+          <li class="item" v-for="item in cartItems" :key="item.productID">
             <span class="item-name">{{ item.name }}</span>
             <span class="item-quantity">Quantity: {{ item.quantity }}</span>
           </li>
         </ul>
-        <p class="total-price">Total Price: ₹{{ totalAmount }}</p>
-        <a href="/" class="btn btn-primary back-btn"
-          >Back to Home</a
-        >
+        <p v-if="orderId" class="order-id">Order #{{ orderId }}</p>
+        <p class="total-price">Total Price: ₹{{ totalAmount.toFixed(2) }}</p>
+        <router-link to="/" class="btn btn-primary back-btn">Back to Home</router-link>
       </div>
     </div>
   </div>
@@ -22,22 +21,23 @@
 export default {
   data() {
     return {
-      cartItems: [], // Pass the cart items as a prop from the previous component or fetch them from the store
-      totalAmount: 0, // Pass the total amount as a prop from the previous component or fetch it from the store
+      cartItems: [],
+      totalAmount: 0,
+      orderId: null,
     };
   },
   created() {
-    // Retrieve data from sessionStorage
-    const storedCartItems = sessionStorage.getItem('cartItems');
-    this.cartItems = storedCartItems ? JSON.parse(storedCartItems) : [];
-
-    const storedTotalAmount = sessionStorage.getItem('totalAmount');
-    this.totalAmount = storedTotalAmount ? parseFloat(storedTotalAmount) : 0;
+    // Written by Shopping_cart.vue from the checkout response (server-computed total).
+    try {
+      const storedCartItems = sessionStorage.getItem("cartItems");
+      this.cartItems = storedCartItems ? JSON.parse(storedCartItems) : [];
+    } catch {
+      this.cartItems = [];
+    }
+    const storedTotalAmount = parseFloat(sessionStorage.getItem("totalAmount"));
+    this.totalAmount = Number.isFinite(storedTotalAmount) ? storedTotalAmount : 0;
+    this.orderId = sessionStorage.getItem("orderId");
   },
-  mounted(){
-    console.log(this.cartItems)
-    console.log(this.totalAmount)
-  }
 };
 </script>
 

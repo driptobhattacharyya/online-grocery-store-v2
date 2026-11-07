@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest --cov=app --cov=applications --cov-report=term-missing
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: grocery-store:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Refuses to start with weak production config
+        run: |
+          set +e
+          timeout 60 docker run --rm -e APP_ENV=production grocery-store:ci
+          status=$?
+          set -e
+          echo "exit status: $status"
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo "::error::Container started (or hung) without production secrets"
+            exit 1
+          fi
+
+      - name: Start container with production settings
+        run: |
+          docker run -d --name grocery -p 8000:8000 \
+            -e APP_ENV=production \
+            -e SECRET_KEY="$(openssl rand -hex 32)" \
+            -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+            -e ADMIN_PASSWORD="$(openssl rand -hex 16)" \
+            grocery-store:ci
+
+      - name: Wait for /api/ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/api/ready; then
+              echo
+              echo "Ready after ${i} attempt(s)"
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' grocery)" != "true" ]; then
+              echo "::error::Container exited"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::/api/ready did not become healthy within 120 seconds"
+          exit 1
+
+      - name: Smoke test
+        run: |
+          curl -fsS http://127.0.0.1:8000/api/health
+          curl -fsS http://127.0.0.1:8000/api/getCategories > /dev/null
+          # The built frontend is served for client-side routes.
+          curl -fsS http://127.0.0.1:8000/login | grep -qi '<div id="app"'
+          # Security headers, including HSTS in production.
+          curl -fsSI http://127.0.0.1:8000/api/health | grep -qi '^strict-transport-security:'
+
+      - name: Container logs
+        if: always()
+        run: docker logs grocery || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f grocery || true

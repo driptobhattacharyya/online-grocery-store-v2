@@ -1,6 +1,6 @@
 <template>
   <div>
-    <Navbar :user="name" :signed="signed" @ChildEvent="handleChildEvent" />
+    <Navbar :user="name" :signed="signed" />
     <div class="container">
       <div class="row">        
         <div class="col-md-6">
@@ -18,7 +18,7 @@
             <div class="card-body">
               <h4 class="card-title">Manager Status</h4>
               <p class="card-text">{{ manager_status }}</p>            
-              <div class="btn btn-primary btn-sm" v-if=" manager_status =='Not Applied'" @click="apply_manager"> <strong>Apply Now</strong></div>
+              <button type="button" class="btn btn-primary btn-sm" v-if="manager_status === 'Not Applied' || manager_status === 'Denied'" @click="apply_manager"><strong>{{ manager_status === 'Denied' ? 'Apply Again' : 'Apply Now' }}</strong></button>
             </div>
           </div>
         </div>
@@ -26,15 +26,15 @@
       <div class="col-md-8 mx-auto">
         <h1 class="text-center">User Order History</h1>
 
-        <div v-for="order in orders" :key="order.id" class="order-card card mb-3">
+        <div v-for="order in orders" :key="order.order_id" class="order-card card mb-3">
           <div class="card-body">
             <p class="order-date">{{ order.order_date }}</p>
             <ul class="order-items list-group">
-              <li v-for="item in order.items" :key="item.product_id" class="order-item list-group-item">
+              <li v-for="(item, index) in order.items" :key="index" class="order-item list-group-item">
                 {{ item.quantity }} x {{ item.product_name }}
               </li>
             </ul>
-            <p class="order-total mt-3">Total: ₹{{ order.total_price }}</p>
+            <p class="order-total mt-3">Total: ₹{{ Number(order.total_price).toFixed(2) }}</p>
           </div>
         </div>
       </div>
@@ -48,7 +48,7 @@ import Navbar from "@/components/Navbar.vue";
 import "@/assets/style.css";
 
 export default {
-  components:{
+  components: {
     Navbar,
   },
   data() {
@@ -56,64 +56,40 @@ export default {
       user: {},
       orders: [],
       signed: false,
-      user: "",
-      manager_status: ""
+      name: "",
+      manager_status: "",
     };
   },
   mounted() {
     this.fetch_user_dashboard();
-    this.signed = sessionStorage.getItem("signed");
+    this.signed = sessionStorage.getItem("signed") === "true";
     this.name = sessionStorage.getItem("name");
   },
-  methods:{
+  methods: {
+    authHeaders() {
+      return { headers: { Authorization: "Bearer " + sessionStorage.getItem("accessToken") } };
+    },
     async fetch_user_dashboard() {
       try {
-        const token = sessionStorage.getItem("accessToken");
-        console.log(token);
-        axios
-          .get("http://localhost:5000/api/dashboard", {
-            mode: "no-cors",
-            headers: {
-              Authorization: "Bearer " + token,
-            },
-          })
-          .then((response) => {
-            this.received_data = response.data;
-            console.log(this.received_data);
-            this.user = this.received_data.user_info;
-            this.orders = this.received_data.user_orders;
-            this.manager_status = this.received_data.manager_status;
-          });
+        const response = await axios.get("/api/dashboard", this.authHeaders());
+        this.user = response.data.user_info;
+        this.orders = response.data.user_orders;
+        this.manager_status = response.data.manager_status;
       } catch (error) {
-        console.error("Error:", error);
+        console.error("Error loading dashboard:", error);
+        alert(error?.response?.data?.error || "Could not load your dashboard.");
       }
     },
-
     async apply_manager() {
       try {
-        const token = sessionStorage.getItem("accessToken");
-        console.log(token);
-        axios
-          .get("http://localhost:5000/api/apply_manager", {
-            mode: "no-cors",
-            headers: {
-              Authorization: "Bearer " + token,
-            },
-          })
-          .then((response) => {
-            console.log(this.received_data);
-            if (response.data.success){
-              alert("Successfully applied");
-              window.location.reload();
-            } else {
-              alert(response.data.error);
-            }
-          });
+        await axios.post("/api/apply_manager", {}, this.authHeaders());
+        alert("Successfully applied");
+        this.fetch_user_dashboard();
       } catch (error) {
-        console.error("Error:", error);
+        alert(error?.response?.data?.error || "Could not submit your application.");
       }
     },
-  }
+  },
 };
 </script>
 
@@ -157,4 +133,4 @@ export default {
   font-weight: bold;
   color: #28a745; /* Green color for total price */
 }
-</style>
+</style>

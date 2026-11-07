@@ -1,94 +1,88 @@
-from applications.database import *
+from applications.database import get_db
+from applications.http_errors import Conflict, NotFound
 from applications.user_info import fetch_user_info
 
+
 def manager_check(email):
-    db = get_db()
-    cursor = db.cursor()
+    cursor = get_db().cursor()
     try:
-        query = "SELECT * FROM store_manager WHERE email=? AND manager_status='approved' "
-        cursor.execute(query, (email,))
-        manager = cursor.fetchone()
+        cursor.execute("SELECT 1 FROM store_manager WHERE email=? AND manager_status='approved'", (email,))
+        return cursor.fetchone() is not None
+    finally:
         cursor.close()
-        if manager is None:
-            return False
-        else:
-            return True
-    except Exception as e:
-        cursor.close()
-        raise e
-    
+
 
 def manager_status_check(email):
-    db = get_db()
-    cursor = db.cursor()
+    cursor = get_db().cursor()
     try:
-        query = "SELECT manager_status FROM store_manager WHERE email=? "
-        cursor.execute(query, (email,))
-        manager_status = cursor.fetchone()
-        if manager_status is None:
-            manager_status = "Not Applied"
-        else:
-            manager_status = manager_status[0]
-        print(f"Manager status: {manager_status}")
-        return manager_status
+        cursor.execute("SELECT manager_status FROM store_manager WHERE email=?", (email,))
+        row = cursor.fetchone()
+    finally:
         cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
+    return row[0] if row else "Not Applied"
+
+
 def add_manager_apply(email):
+    """Record a request to become a store manager.
+
+    A user whose earlier request was denied may apply again; a pending or
+    approved user may not.
+    """
     db = get_db()
     cursor = db.cursor()
     try:
-        query = "INSERT INTO store_manager (email, manager_status) VALUES (?, 'pending')"
-        cursor.execute(query, (email,))
+        cursor.execute("SELECT manager_status FROM store_manager WHERE email=?", (email,))
+        row = cursor.fetchone()
+        if row and row[0] == "pending":
+            raise Conflict("You have already applied for manager status.")
+        if row and row[0] == "approved":
+            raise Conflict("You are already a store manager.")
+        cursor.execute(
+            "INSERT OR REPLACE INTO store_manager (email, manager_status) VALUES (?, 'pending')", (email,)
+        )
         db.commit()
-        cursor.close()
-    except Exception as e:
+    except Exception:
         db.rollback()
+        raise
+    finally:
         cursor.close()
-        raise e
-    
+
+
 def get_manager_requests():
+    cursor = get_db().cursor()
+    try:
+        cursor.execute("SELECT email FROM store_manager WHERE manager_status='pending'")
+        emails = [row[0] for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+    requests = []
+    for email in emails:
+        user = fetch_user_info(email)
+        requests.append(user or {'email': email, 'name': None, 'address': None, 'phone_no': None})
+    return requests
+
+
+def _decide_request(email, status):
     db = get_db()
     cursor = db.cursor()
     try:
-        query = "SELECT email FROM store_manager WHERE manager_status='pending'"
-        cursor.execute(query)
-        manager_requests = cursor.fetchall()
+        cursor.execute(
+            "UPDATE store_manager SET manager_status=? WHERE email=? AND manager_status='pending'",
+            (status, email),
+        )
+        if cursor.rowcount == 0:
+            raise NotFound("No pending manager request for this user.")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
         cursor.close()
-        requests = []
-        for email in manager_requests:
-            user = fetch_user_info(email[0])
-            requests.append(user)
-        return requests
-    except Exception as e:
-        cursor.close()
-        raise e
-    
+
+
 def approve_manager(email):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        query = "UPDATE store_manager SET manager_status='approved' WHERE email=?"
-        cursor.execute(query, (email,))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
-    
+    _decide_request(email, "approved")
+
+
 def deny_manager(email):
-    db = get_db()
-    cursor = db.cursor()
-    try:
-        query = "UPDATE store_manager SET manager_status='Denied' WHERE email=?"
-        cursor.execute(query, (email,))
-        db.commit()
-        cursor.close()
-    except Exception as e:
-        db.rollback()
-        cursor.close()
-        raise e
+    _decide_request(email, "Denied")

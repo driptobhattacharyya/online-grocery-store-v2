@@ -1,25 +1,115 @@
-# online-grocery-store-v2
-This is an enhanced version of the original Grocery Store project by me. Although it looks similar, it has various features, like mailing the user daily reminders and monthly reports. Also, there's caching for efficiency, downloading sales reports asynchronously, store manager role, etc. 
+# Online Grocery Store v2
 
-# Steps to run the project
-1. cd into the "Code" folder
-2. run "python app.py"
-3. cd into the "frontend" folder
-4. run "npm install". This might take a couple of seconds.
-5. run "npm run serve"
-6. Open on browser "localhost:8080"
-7. register on the page and login can be done
-8. All the user-end features can be used once logged in
+A full-stack grocery store with three roles — **shoppers**, **store managers** and an **admin** — built with **Flask** (REST API, JWT auth) and **Vue 3** (Vite, Vue Router, Bootstrap 5).
 
-To access the admin-end:
-1. Go to login
-2. Go to "manager login"
-3. username: admin    password: password
-4. Once logged in, all the manager-end features can be used
+## Features
 
-# Enable Mailing
-1. Ensure a Redis server is running on localhost:6379
-2. Ensure you have a mailing server setup, preferably Mailhog. To set up properly authenticated mailing (like Gmail), you need to make changes to the file "mail_service.py" under the "applications" folder.
-3. cd into the "Code" folder
-4. run "celery -A app:celery_app worker --loglevel INFO -P solo --concurrency 1" for celery worker
-5. run "celery -A app.celery_app beat --max-interval 1 -l info" for celery beat
+- Browse products, filter by category, search by name, price range, manufacture/expiry dates and stock
+- Shopping cart and checkout with live inventory updates
+- User dashboard with profile and order history
+- Users can apply to become a store manager; the admin approves or rejects requests
+- Managers and the admin can add, edit and delete products; the admin also manages categories
+- Downloadable sales report (CSV)
+- Response caching (Redis, or in-memory when Redis isn't configured)
+- Optional background jobs with Celery + Redis: daily reminder e-mails and monthly spending reports
+
+## Demo accounts
+
+A fresh database is created and seeded with a demo catalog on first start.
+
+These accounts are public. In particular, anyone can log in as the demo manager and edit or delete products; on a free Render instance the catalog goes back to the demo data the next time the database resets (see [Deploy](#deploy)).
+
+| Role    | Login page        | Username / e-mail     | Password                                 |
+|---------|-------------------|-----------------------|------------------------------------------|
+| Shopper | `/login`          | `demo@grocery.app`    | `demo1234`                               |
+| Manager | `/login`          | `manager@grocery.app` | `manager1234`                            |
+| Admin   | `/admin/login`    | `admin`               | value of `ADMIN_PASSWORD` (default `password`) |
+
+## Run locally
+
+Requires Python 3.11+ and Node 20+.
+
+```bash
+# API (http://localhost:5000)
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+
+# Frontend dev server (http://localhost:8080), proxies /api to Flask
+cd frontend
+npm install
+npm run dev
+```
+
+To try the production setup locally, run `npm run build` in `frontend/`, then open http://localhost:5000: Flask serves the built app itself.
+
+Or with Docker:
+
+```bash
+docker build -t grocery-store .
+docker run -p 8000:8000 \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e ADMIN_PASSWORD=choose-a-strong-one \
+  grocery-store
+# open http://localhost:8000
+```
+
+The image runs with `APP_ENV=production`, so it refuses to start with missing or default secrets (keys must be at least 32 characters, admin password at least 8 and not `password`).
+
+Production mode trusts one reverse proxy's `X-Forwarded-For` header (right for Render). When nothing sits in front of the container, as with plain `docker run` or a VPS without a reverse proxy, add `-e TRUSTED_PROXY_COUNT=0`; otherwise clients can send a fake `X-Forwarded-For` and get around the login rate limit.
+
+Nothing reads a `.env` file automatically. To use one, copy `.env.example` to `.env` and pass `--env-file .env` to `docker run`, or export it into your shell.
+
+## Deploy
+
+The app ships as one Docker image: the Vue app is built and served by Flask/Gunicorn, so there is one service and no CORS setup.
+
+**Render (free tier):** push to GitHub, then in Render choose **New + → Blueprint** and select this repo. `render.yaml` generates the secret keys; set `ADMIN_PASSWORD` when prompted.
+
+After the first deploy, open the service's logs and look at one access-log line. It starts with the request's `X-Forwarded-For` header (see `gunicorn.conf.py`). Check that the number of addresses added by Render's proxy matches `TRUSTED_PROXY_COUNT` (1 by default): with a single client address in the header, 1 is right. If Render ever adds more hops, raise the count to match, or the rate limiter will see a proxy address instead of the client's.
+
+Any Docker host works the same way (Fly.io, Railway, Google Cloud Run, a VPS). The container listens on `$PORT` (default 8000). Health checks: `/api/health` (process up) and `/api/ready` (database reachable).
+
+Production defaults: auth tokens expire after 12 hours, login and signup are rate-limited per IP, and responses carry a strict Content-Security-Policy and other security headers.
+
+> On free tiers the disk is ephemeral, so the SQLite database resets to the demo data on every redeploy, restart and idle spin-down (Render's free instances spin down after about 15 minutes without traffic). Sign-ups, orders and catalog edits are lost then. For a portfolio demo that's useful, because it keeps the demo clean. Logins don't survive a reset either: every token records which database it was issued for, so after a reset the app asks everyone to log in again. To keep data, mount a volume and point `DATABASE_PATH` at it.
+
+### Configuration
+
+The main settings are below; `.env.example` documents every variable (rate limits, token lifetime, proxy count, gunicorn tuning, CSP, logging).
+
+| Variable          | Default                  | Purpose                                          |
+|-------------------|--------------------------|--------------------------------------------------|
+| `APP_ENV`         | `development`            | `production` enables the startup secrets check and HSTS |
+| `SECRET_KEY`      | dev value                | Flask secret. **Set in production.**             |
+| `JWT_SECRET_KEY`  | `SECRET_KEY`             | Signs auth tokens. **Set in production.**        |
+| `ADMIN_USERNAME`  | `admin`                  | Admin login                                      |
+| `ADMIN_PASSWORD`  | `password`               | Admin password. **Set in production.**           |
+| `DATABASE_PATH`   | `./data/grocery.db`      | SQLite file, created and seeded if missing       |
+| `REDIS_URL`       | unset (in-memory cache)  | Enables the Redis cache and the Celery broker    |
+| `CORS_ORIGINS`    | unset                    | Comma-separated origins, only if the frontend is hosted separately |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SENDER_EMAIL` | `localhost:1025` (MailHog) | E-mail for background jobs |
+
+### Background e-mail jobs (optional)
+
+Leave these off on a public deployment: sign-up e-mail addresses are not verified, so the jobs would send mail to whatever addresses visitors typed in. They only run when you start a Celery worker and beat yourself.
+
+With Redis running and `REDIS_URL` set:
+
+```bash
+celery -A app:celery_app worker --loglevel INFO
+celery -A app:celery_app beat --loglevel INFO
+```
+
+[MailHog](https://github.com/mailhog/MailHog) on `localhost:1025` is handy for capturing the e-mails locally.
+
+## Project layout
+
+```
+app.py                 Flask app, Celery schedule, serves the built frontend
+applications/          API routes, auth helpers, DB access, background tasks
+frontend/              Vue 3 + Vite single-page app
+Dockerfile, gunicorn.conf.py, render.yaml, .env.example
+docs/                  Original project report
+```

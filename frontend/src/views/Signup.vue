@@ -1,5 +1,3 @@
-// Your Vue.js component
-
 <template>
   <div class="container py-4 py-xl-5 mx-auto col-xl-3">
     <h2>Signup</h2>
@@ -74,8 +72,8 @@
       <div>
         <button type="submit" class="btn btn-primary">Sign up</button>
       </div>
-      <p>Already have an account? <a href="/login">Login</a></p>
-      <p>Are you the admin? <a href="/admin/login">Click here</a></p>
+      <p>Already have an account? <router-link to="/login">Login</router-link></p>
+      <p>Are you the admin? <router-link to="/admin/login">Click here</router-link></p>
     </form>
   </div>
 </template>
@@ -97,30 +95,22 @@ export default {
   },
   methods: {
     async signup() {
-      if (this.password !== this.confirm_password){
-        alert("Passwords do not match")
-      } else{
-        axios
-          .post("http://localhost:5000/api/signup", {
-            name: this.name,
-            phoneNo: this.phoneNo,
-            address: this.address,
-            email: this.email,
-            password: this.password,
-          })
-          .then((response) => {
-            if (response.data.message == "Success"){
-              console.log(response.data);
-              alert("Welcome aboard! Now you have to login.")
-              this.$router.push("/login");            
-            }
-            else{
-              alert(response.data.Error)
-            }
-          })
-          .catch((error) => {
-            alert(error.response.data.error);
-          });        
+      if (this.password !== this.confirm_password) {
+        alert("Passwords do not match");
+        return;
+      }
+      try {
+        await axios.post("/api/signup", {
+          name: this.name,
+          phoneNo: this.phoneNo,
+          address: this.address,
+          email: this.email,
+          password: this.password,
+        });
+        alert("Welcome aboard! Now you have to login.");
+        this.$router.push("/login");
+      } catch (error) {
+        alert(error?.response?.data?.error || "Sign up failed. Please try again.");
       }
     },
   },

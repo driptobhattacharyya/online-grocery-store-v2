@@ -9,9 +9,11 @@
     <Navbar :user="name" :signed="signed" @ChildEvent="handleChildEvent" />
     <div>
       <div class="container">
+        <p v-if="!loading && products.length === 0" class="text-center mt-4">No products to show.</p>
         <div class="row row-cols-1 row-cols-md-3 g-4">
           <ProductCard
             v-for="product in products"
+            :key="product[0]"
             :product="product"
             :signed="signed"
           />
@@ -27,6 +29,27 @@ import ProductCard from "@/components/ProductCard.vue";
 import Navbar from "@/components/Navbar.vue";
 import "@/assets/style.css";
 
+// ProductCard reads products as rows: [productID, name, manufacture_date,
+// expiry_date, price, dynamic_price, is_recommended, categoryID, unit,
+// inventoryId, productID, stock]. Search results arrive as objects.
+function toRow(product) {
+  if (Array.isArray(product)) return product;
+  return [
+    product.productID,
+    product.name,
+    product.manufacture_date,
+    product.expiry_date,
+    product.price,
+    product.dynamic_price,
+    product.is_recommended,
+    product.categoryID,
+    product.unit,
+    null,
+    product.productID,
+    product.stock ?? 0,
+  ];
+}
+
 export default {
   components: {
     ProductCard,
@@ -34,7 +57,6 @@ export default {
   },
   data() {
     return {
-      received_data: [],
       loading: false,
       products: [],
       name: "",
@@ -42,50 +64,25 @@ export default {
     };
   },
   mounted() {
-    this.signed = sessionStorage.getItem("signed");
+    this.signed = sessionStorage.getItem("signed") === "true";
     this.name = sessionStorage.getItem("name");
-    if (!this.loading && !this.received_data.length) {
-      this.loading = true;
-      axios
-        .get("http://localhost:5000/api/user_dashboard")
-        .then((response) => {
-          this.received_data = response.data;
-          this.products = this.received_data.products;
-        })
-        .catch((error) => {
-          console.error("Error fetching data:", error);
-        })
-        .finally(() => {
-          this.loading = false;
-        });
-    }
+    this.loadProducts();
   },
   methods: {
-    handleChildEvent(products) {
-      console.log("Printing 1 product " + products[0]);
-      if (products[0].categoryID) {
-        console.log("Coming through...");
-        var new_products = [];
-        for (var i = 0; i < products.length; i++) {
-          var product = products[i];
-          var new_product = [
-            product.productID,
-            product.name,
-            product.manufacture_date,
-            product.expiry_date,
-            product.price,
-            product.dynamic_price,
-            product.is_recommended,
-            product.categoryID,
-            product.unit,
-          ];
-          new_products.push(new_product);
-        }
-        this.products = new_products;
-      } else {
-        this.products = products;
+    async loadProducts() {
+      this.loading = true;
+      try {
+        const response = await axios.get("/api/user_dashboard");
+        this.products = response.data.products;
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        alert(error?.response?.data?.error || "Could not load products.");
+      } finally {
+        this.loading = false;
       }
-      console.log(this.products);
+    },
+    handleChildEvent(products) {
+      this.products = (products || []).map(toRow);
     },
   },
 };
